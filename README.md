@@ -17,4 +17,16 @@ python scripts/spark_smoke.py
 
 The expected output includes `range(5).count() = 5`. The check ran successfully with Spark 3.5.7 on the local laptop. Later commits will add the ingestion, reconstruction, streaming, storage, and dashboard implementation.
 
-**History note:** a fuller prototype was built locally before this repository's first commit. This commit records the week-one deliverable, not the original authorship date of that prototype. Data files, environments, credentials, and generated reports are excluded from Git. Development used Codex assistance and requires team review.
+## Week 2: local HDFS storage check
+
+The [Hadoop ecosystem note](docs/week02_hadoop.md) explains the one-NameNode, one-DataNode local profile, checked Hadoop installation, and the HDFS write/read SHA-256 smoke test. Run from WSL at `/mnt/e/big_data`:
+
+```bash
+bash deploy/native/hdfs-install.sh
+bash deploy/native/hdfs-start.sh
+bash deploy/native/hdfs-smoke.sh
+```
+
+On a new, empty project store, pass `--init-empty` to `hdfs-start.sh` for the first start. The measured smoke passed on one DataNode; this is local storage integration, not a multi-node deployment.
+
+**History note:** a fuller prototype was built locally before this repository's first commit. Weekly commits record reviewed deliverables, not the original authorship dates of that prototype. Data files, environments, credentials, and generated reports are excluded from Git. Development used Codex assistance and requires team review.

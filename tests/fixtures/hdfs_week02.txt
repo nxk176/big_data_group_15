@@ -1,0 +1,2 @@
+HarborTrace week 2 HDFS round-trip fixture.
+This small file tests storage integrity; it contains no AIS data.
