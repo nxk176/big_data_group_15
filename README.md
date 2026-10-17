@@ -30,3 +30,9 @@ bash deploy/native/hdfs-smoke.sh
 On a new, empty project store, pass `--init-empty` to `hdfs-start.sh` for the first start. The measured smoke passed on one DataNode; this is local storage integration, not a multi-node deployment.
 
 **History note:** a fuller prototype was built locally before this repository's first commit. Weekly commits record reviewed deliverables, not the original authorship dates of that prototype. Data files, environments, credentials, and generated reports are excluded from Git. Development used Codex assistance and requires team review.
+
+## Week 3: Lambda architecture and data contracts
+
+The [architecture design](docs/week03_architecture.md) maps the NOAA/USACE source snapshots through HDFS, Spark batch, Kafka replay, Spark Structured Streaming, MongoDB, and the dashboard. The [data contract](docs/week03_contracts.md) defines identities, event time, provenance, uncertainty, reconciliation, and later acceptance evidence. The [visit decision table](docs/visit_decision_table.md) specifies the proposed `visits-v1` state transitions.
+
+This commit publishes a design milestone. The first two published runtime checks remain the Spark smoke and single-DataNode HDFS round trip. Full-pipeline tests and deployment evidence belong to later milestones.
