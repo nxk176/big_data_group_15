@@ -1,0 +1,22 @@
+{
+  "normal_entry_exit": {
+    "events": [["2024-01-01T00:00:00Z", null], ["2024-01-01T00:05:00Z", "4120"], ["2024-01-01T00:15:00Z", "4120"], ["2024-01-01T00:20:00Z", null], ["2024-01-01T00:30:00Z", null]],
+    "expected": [{"first_inside": "2024-01-01T00:05:00+00:00", "last_inside": "2024-01-01T00:15:00+00:00", "possible_entry_after": "2024-01-01T00:00:00+00:00", "possible_exit_by": "2024-01-01T00:20:00+00:00", "observed_span_seconds": 600, "observation_count": 2, "left_censored": false, "right_censored": false, "status": "reconciled"}]
+  },
+  "crosses_midnight": {
+    "events": [["2024-01-01T23:45:00Z", null], ["2024-01-01T23:55:00Z", "4120"], ["2024-01-02T00:05:00Z", "4120"], ["2024-01-02T00:10:00Z", null], ["2024-01-02T00:20:00Z", null]],
+    "expected": [{"first_inside": "2024-01-01T23:55:00+00:00", "last_inside": "2024-01-02T00:05:00+00:00", "possible_entry_after": "2024-01-01T23:45:00+00:00", "possible_exit_by": "2024-01-02T00:10:00+00:00", "observed_span_seconds": 600, "left_censored": false, "right_censored": false}]
+  },
+  "long_gap_splits": {
+    "events": [["2024-01-01T00:00:00Z", null], ["2024-01-01T00:05:00Z", "4120"], ["2024-01-01T00:15:00Z", "4120"], ["2024-01-01T01:00:00Z", "4120"]],
+    "expected": [{"first_inside": "2024-01-01T00:05:00+00:00", "right_censored": true, "status": "reconciled", "flag": "long_gap_unknown_continuity"}, {"first_inside": "2024-01-01T01:00:00+00:00", "left_censored": true, "right_censored": true, "status": "candidate"}]
+  },
+  "input_range_censoring": {
+    "events": [["2024-01-01T00:00:00Z", "4120"], ["2024-01-01T00:10:00Z", "4120"]],
+    "expected": [{"left_censored": true, "right_censored": true, "possible_entry_after": null, "possible_exit_by": null, "status": "reconciled"}]
+  },
+  "short_excursion": {
+    "events": [["2024-01-01T00:00:00Z", null], ["2024-01-01T00:05:00Z", "4120"], ["2024-01-01T00:15:00Z", "4120"], ["2024-01-01T00:20:00Z", null], ["2024-01-01T00:25:00Z", "4120"], ["2024-01-01T00:30:00Z", null], ["2024-01-01T00:40:00Z", null]],
+    "expected": [{"observation_count": 3, "possible_exit_by": "2024-01-01T00:30:00+00:00", "flag": "short_excursion_or_boundary_jitter"}]
+  }
+}

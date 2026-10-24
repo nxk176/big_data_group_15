@@ -2,7 +2,7 @@
 
 ## Problem and scope
 
-HarborTrace aims to reconstruct **observed presence in port areas** from historical AIS vessel positions. The first geographic scope is the Los Angeles and Long Beach statistical port areas. A visit will carry its supporting observations, time bounds, quality flags, and uncertainty. Observed presence is not proof of berth occupancy, cargo handling, or true congestion.
+HarborTrace aims to reconstruct **observed presence in port areas** from historical AIS vessel positions. The first geographic scope is the Los Angeles and Long Beach port polygons in the USACE **Ports** layer (ID 0). A visit will carry its supporting observations, time bounds, quality flags, and uncertainty. Observed presence is not proof of berth occupancy, cargo handling, or true congestion.
 
 The project is suitable for a big data course because a daily national AIS file contains millions of observations, while duplicates, missing coverage, out-of-order events, geometry checks, and repeatable storage complicate a simple point-in-polygon query.
 
@@ -11,7 +11,7 @@ The project is suitable for a big data course because a daily national AIS file 
 | Input | Provider | Planned use |
 |---|---|---|
 | [2024 historical AIS GeoParquet](https://github.com/ocm-marinecadastre/ais-vessel-traffic/blob/main/data/ais-broadcast-points-2024-readme.md) | NOAA Office for Coastal Management | Event-time positions and vessel identifiers; source files kept immutable with checksums. |
-| [Port Statistical Area feature service](https://services7.arcgis.com/n1YM8pTrFmm7L4hs/arcgis/rest/services/Port_Statistical_Area/FeatureServer/0) | US Army Corps of Engineers | Port-area polygons and their metadata; boundaries and data years recorded. |
+| [Ports layer (ID 0) of the Port and Port Statistical Area service](https://services7.arcgis.com/n1YM8pTrFmm7L4hs/arcgis/rest/services/Port_Statistical_Area/FeatureServer/0) | US Army Corps of Engineers | Port polygons and their metadata; boundaries and data years recorded. |
 
 AIS is provider-processed historical data, not live radio messages. Polygon boundaries are port areas, not berths. Their vintage, AIS gaps, and MMSI identity uncertainty will be assessed before making claims about visits.
 
