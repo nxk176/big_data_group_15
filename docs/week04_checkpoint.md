@@ -6,6 +6,15 @@ The [week-three Lambda diagram](week03_architecture.md) shows the full target sy
 
 ## Run from a fresh checkout
 
+If the existing laptop environment is already installed, open Ubuntu directly and run:
+
+```bash
+cd /mnt/e/big_data
+source ~/.venvs/harbortrace/bin/activate
+export PYTHONPATH="$PWD/src"
+python scripts/week04_checkpoint.py
+```
+
 Use Ubuntu 24.04 / WSL2, Python 3.12, and Java 17. Run the commands below from the repository root; on the existing laptop, first run `cd /mnt/e/big_data`. The [README](../README.md) includes the clone command. After installing dependencies, the demo needs only the included fixtures and does not require Kafka, MongoDB, or the large NOAA file.
 
 ```bash

@@ -84,19 +84,25 @@ python -m pip install -r requirements-week04.txt
 PYTHONPATH=src python scripts/week04_checkpoint.py
 ```
 
-If the repository is already present, run the environment and demo commands from its root. On the existing project laptop, the following PowerShell command uses the already installed environment:
-
-```powershell
-wsl.exe -- bash -lc 'cd /mnt/e/big_data && source ~/.venvs/harbortrace/bin/activate && PYTHONPATH=src python scripts/week04_checkpoint.py'
-```
-
-Or enter Ubuntu with `wsl` and run:
+If the repository is already present, open its Ubuntu terminal directly. On the existing project laptop, use the installed environment:
 
 ```bash
 cd /mnt/e/big_data
 source ~/.venvs/harbortrace/bin/activate
-PYTHONPATH=src python scripts/week04_checkpoint.py
+export PYTHONPATH="$PWD/src"
+python scripts/week04_checkpoint.py
 ```
+
+For a pre-presentation check in that same terminal:
+
+```bash
+python --version
+java -version
+git log -1 --oneline
+ls -lh tests/fixtures/reference_cases.json tests/fixtures/real_ais_excerpt.jsonl
+```
+
+The fixture files are included in Git. The existing environment does not need to be recreated or reinstalled for each presentation. In a new terminal, repeat `cd`, `source`, and `export`. To explain the execution plan, run `python scripts/week04_checkpoint.py --details` after the main demonstration.
 
 `/mnt/e/big_data` is the WSL view of `E:\big_data`. `source` activates the Python environment. `PYTHONPATH=src` makes the project package available to the driver and Python workers. The default output is three readable terminal tables: synthetic visits, a real excerpt visit, and summary metrics. Use the default command when presenting.
 
@@ -303,14 +309,19 @@ Prepare the architecture preview, a terminal, the fixture, and `spark_core.py`. 
 | 3:00-4:00 | Show the real NOAA visit table. | Eighteen minutes confirms presence, while missing outside evidence censors both ends. |
 | 4:00-5:00 | Open `reconstruct_frame()`. | Identify actual shuffle/sort operators and describe the next ingestion, streaming, serving, and evaluation milestones. |
 
-On the existing laptop, inspect the local full-pilot evidence from PowerShell without redownloading data:
+On the existing laptop, inspect the local full-pilot evidence in the same Ubuntu terminal without redownloading data:
 
-```powershell
-Get-Item E:\big_data\data\source\ais-2024-01-01.parquet |
-  Select-Object Name, Length
-
-$pilotManifest = Get-Content -Raw -Encoding utf8 E:\big_data\data\canonical\ais-2024-01-01-regional.manifest.json | ConvertFrom-Json
-$pilotManifest.row_accounting | Format-List
+```bash
+ls -lh data/source/ais-2024-01-01.parquet \
+  data/canonical/ais-2024-01-01-regional.parquet
+python - <<'PY'
+import json
+from pathlib import Path
+path = Path("data/canonical/ais-2024-01-01-regional.manifest.json")
+a = json.loads(path.read_text())["row_accounting"]
+for key in ("source_rows", "canonical_rows", "duplicate_rows", "outside_region"):
+    print(f"{key:<20} {a.get(key, 0):>12,}")
+PY
 ```
 
 The row categories must sum to the source count. This inspects a previously prepared local snapshot, while the small checkpoint exercises a bounded portion of the processing logic. A fresh Git checkout does not include those large pilot files; use the documented provenance and committed excerpt there.
