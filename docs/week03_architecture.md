@@ -1,8 +1,10 @@
-# Week 3: Lambda architecture and capstone design
+# Week 3: Lambda architecture (batch and speed paths) and capstone design
 
-HarborTrace reconstructs **observed vessel presence** in the Los Angeles and Long Beach port areas from historical AIS positions. The [proposal](week01_proposal.md) defines the problem and source limitations; the [week-two HDFS check](week02_hadoop.md) verifies one local storage component. This milestone fixes the end-to-end design and the contracts that later implementation commits must meet.
+HarborTrace reconstructs **observed vessel presence** in Los Angeles and Long Beach from AIS (Automatic Identification System) positions. The [proposal](week01_proposal.md) defines the problem; the [week-two HDFS (Hadoop Distributed File System) check](week02_hadoop.md) verifies local storage. This milestone fixes the end-to-end design and contracts (shared data-field and behavior requirements).
 
 ## Data flow
+
+Sources are NOAA (National Oceanic and Atmospheric Administration) observations and USACE (U.S. Army Corps of Engineers) boundaries. Spark (a distributed processing engine) computes results; Kafka (an event-streaming platform) transports replay; MongoDB (a document database) serves results. Parquet (column-oriented files) holds canonical (normalized) observations. A manifest (an input/run metadata record) preserves provenance (traceability to source evidence).
 
 ```mermaid
 flowchart LR
@@ -38,7 +40,7 @@ This is a **Lambda architecture**: a deterministic batch path is the authority f
 
 1. Keep source bytes and original boundary geometry unchanged. A manifest records checksums, provider, extraction time, and rule/config versions.
 2. Account for every source row as canonical, outside the regional selection, duplicate, conflicting, or invalid. Retain observations outside a port polygon but within the regional selection to establish possible exits.
-3. Sort each vessel's observations by UTC event time and stable IDs before applying the [visit decision table](visit_decision_table.md). The batch result is reproducible for fixed source, boundary, config, and code versions.
+3. Sort by UTC (Coordinated Universal Time) event time and stable IDs (identifiers) before applying the [visit decision table](visit_decision_table.md). Batch results are reproducible for fixed source, boundary, configuration, and code versions.
 4. The speed path labels output `provisional`. Its watermark and state limits are explicit; delayed events outside that limit require batch reconciliation.
 5. Write a complete batch generation, validate counts, then switch one serving pointer. Readers pin that generation for a request. Retain old generations for audit until a separate cleanup decision.
 

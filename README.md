@@ -1,12 +1,12 @@
 # HarborTrace
 
-HarborTrace reconstructs **observed vessel presence in the Los Angeles and Long Beach port areas** from historical NOAA AIS positions and USACE port boundaries. The target system uses Lambda architecture with Spark batch and streaming, HDFS, Kafka, MongoDB, and a dashboard.
+HarborTrace reconstructs **observed vessel presence in the Los Angeles and Long Beach port areas** from AIS (Automatic Identification System) positions published by NOAA (National Oceanic and Atmospheric Administration) and boundaries from USACE (U.S. Army Corps of Engineers). The target uses Lambda architecture (batch reconstruction plus provisional streaming), Apache Spark (a distributed processing engine), HDFS (Hadoop Distributed File System), Kafka (an event-streaming platform), MongoDB (a document database), and a dashboard (a visual data interface).
 
 The **26 October checkpoint** includes executable Spark batch reconstruction, a synthetic dataset with expected results, a small real NOAA excerpt, and the [system architecture](docs/week03_architecture.md).
 
 ## Run the checkpoint
 
-Use Ubuntu / WSL2, Python 3.12, and Java 17. From a fresh checkout:
+Use Ubuntu / WSL2 (Windows Subsystem for Linux, version 2), Python 3.12, and Java 17. PySpark (the Python interface to Spark) runs the processing code. From a fresh checkout:
 
 ```bash
 git clone https://github.com/nxk176/big_data_group_15.git
@@ -39,13 +39,13 @@ CHECKPOINT SUMMARY
 +-----------------------------+-------+
 ```
 
-Spark repartitions by MMSI, sorts observations within partitions, and applies the visit state machine. The command checks the expected fields for five synthetic scenarios and one real excerpt visit. The default output is formatted for a terminal presentation. Add `--details` for a provenance table and physical plan, or `--json` for the machine-readable summary. `PASS` verifies these bounded checks; it does not measure accuracy or scalability on the full dataset.
+Spark repartitions by MMSI (Maritime Mobile Service Identity, a maritime radio identifier), sorts observations within partitions, and applies the visit state machine. The command checks the expected fields for five synthetic scenarios and one real excerpt visit. The default output is formatted for a terminal presentation. Add `--details` for a provenance table and physical plan, or `--json` for the machine-readable summary. `PASS` verifies these bounded checks; it does not measure accuracy or scalability on the full dataset.
 
 ## Data and architecture
 
 - [Checkpoint and data provenance](docs/week04_checkpoint.md): source providers, checksums, row accounting, local pilot measurements, and the demonstration sequence.
 - [Synthetic scenarios](tests/fixtures/reference_cases.json): normal entry/exit, crossing midnight, a long gap, censored input, and a short excursion.
-- [Real NOAA excerpt](tests/fixtures/real_ais_excerpt.jsonl): two canonical observations producing one visit with an observed span of 1,080 seconds and both ends censored.
+- [Real NOAA excerpt](tests/fixtures/real_ais_excerpt.jsonl): two canonical (normalized) observations producing one visit with an observed span of 1,080 seconds and both ends censored.
 - [Lambda architecture](docs/week03_architecture.md), [data contracts](docs/week03_contracts.md), and [visit decision table](docs/visit_decision_table.md): component roles and reconstruction rules.
 
 The full January 1 NOAA pilot is stored locally: 7,293,408 source rows and 235,713 regional canonical observations. Those large files are excluded from Git; their provenance and checksums are documented. Port boundaries come from the USACE **Ports layer, ID 0**, within the Port and Port Statistical Area service. Observed area presence does not establish berth occupancy or a verified commercial port call.

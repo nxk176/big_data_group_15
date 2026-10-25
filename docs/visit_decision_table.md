@@ -1,5 +1,7 @@
 # Visit rule decision table (visits-v1)
 
+A visit (a reconstructed period of observed port-area presence) is processed by a state machine (logic retaining information between observations). MMSI (Maritime Mobile Service Identity) is the vessel-grouping identifier; UTC (Coordinated Universal Time) normalizes timestamps. Censoring (missing evidence for an entry or exit bound) is retained in output flags.
+
 All observations are sorted by `(mmsi, event_time_utc, logical_id, source_record_id)` before entering one state machine per vessel and port. The point-in-polygon predicate is `covers`, so an exact boundary point counts as inside but receives `near_boundary` when within the configured distance. Overlap between selected polygons is ambiguous and does not establish inside or outside for either port. A duplicate logical observation is ignored. Same-MMSI/time observations at different positions are quarantined before this machine.
 
 | Current state | Input / condition | Action | Output |

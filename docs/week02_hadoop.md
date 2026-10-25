@@ -1,10 +1,10 @@
-# Week 2: Hadoop ecosystem and a local HDFS round trip
+# Week 2: Hadoop ecosystem and HDFS (Hadoop Distributed File System)
 
-The [week-one proposal](week01_proposal.md) sets HarborTrace's data and target architecture. This milestone verifies the first storage component on the same laptop. Hadoop HDFS separates namespace metadata (NameNode) from file blocks (DataNode). HarborTrace stores its immutable AIS source, selected canonical observations, and boundary snapshot in HDFS in later milestones. Spark can read those HDFS paths for batch work.
+The [week-one proposal](week01_proposal.md) sets HarborTrace's data and target architecture. Hadoop (an ecosystem of distributed-data tools) includes HDFS. A NameNode (metadata manager) tracks the namespace (file directory); DataNodes (storage processes) hold blocks (file pieces). Later milestones retain AIS (Automatic Identification System) source data, canonical (normalized) observations, and boundaries in HDFS. Spark (a distributed processing engine) can read those files for batch (fixed-input) work.
 
 ## Local setup
 
-Tested on Ubuntu 24.04 under WSL2 with Java 17. The project stays at `E:\big_data` (`/mnt/e/big_data` in WSL). `hdfs-install.sh` checksum-verifies the Apache Hadoop 3.5.0 archive and installs runtime binaries under the WSL user's home. NameNode/DataNode data, PID files, and logs are under `E:\big_data\data` and are ignored by Git.
+Tested on Ubuntu 24.04 under WSL2 (Windows Subsystem for Linux, version 2) with Java 17. The project stays at `E:\big_data` (`/mnt/e/big_data` in WSL). `hdfs-install.sh` verifies the archive checksum (a file-integrity fingerprint) and installs Hadoop 3.5.0 under the WSL user's home. Service data, PID (process identifier) files, and logs are under the project root and ignored by Git (source version control).
 
 ```bash
 cd /mnt/e/big_data
@@ -15,11 +15,11 @@ bash deploy/native/hdfs-smoke.sh
 
 For a **new, empty project store only**, use `bash deploy/native/hdfs-start.sh --init-empty` on the first start. The script refuses to format a nonempty NameNode directory, or an existing DataNode directory without a recognized NameNode. Do not apply it to an unrelated HDFS installation. Normal restarts do not format storage. The script starts only the project's NameNode and DataNode; Kafka and MongoDB are outside this milestone.
 
-Configuration is in `deploy/native/core-site.xml` and `deploy/native/hdfs-site.xml`. The NameNode RPC endpoint is `127.0.0.1:9000`, its web UI is `127.0.0.1:9870`, and all bindings are local. `dfs.replication=1` matches the one-DataNode laptop profile. Permissions are disabled only for this isolated local demonstration. These settings are **not** a secured or fault-tolerant deployment profile.
+Configuration is in `deploy/native/core-site.xml` and `deploy/native/hdfs-site.xml`. The NameNode RPC (remote procedure call) endpoint is `127.0.0.1:9000`, its web UI (user interface) is `127.0.0.1:9870`, and all bindings are local. `dfs.replication=1` matches the one-DataNode laptop profile. Permissions are disabled only for this isolated demonstration. These settings are **not** a secured or fault-tolerant deployment profile.
 
 ## Check performed on 2026-10-11
 
-The smoke script checks `hdfs dfsadmin -report` for at least one live DataNode, waits at most 40 seconds for NameNode Safe Mode to end, writes the small `tests/fixtures/hdfs_week02.txt` to `/harbortrace/week02/hdfs_week02.txt`, reads it back with `hdfs dfs -cat`, and compares SHA-256 and byte count. A second run checks the already-present file rather than overwriting it. It does not upload AIS data.
+The smoke script (a small functional check) checks `hdfs dfsadmin -report` for a live DataNode, waits at most 40 seconds for Safe Mode (the NameNode's startup protection state) to end, writes `tests/fixtures/hdfs_week02.txt`, reads it back with `hdfs dfs -cat`, and compares SHA-256 (Secure Hash Algorithm with a 256-bit output) and byte count. A second run checks the existing file rather than overwriting it. It does not upload AIS data.
 
 Observed output from the successful run:
 

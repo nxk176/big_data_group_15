@@ -1,8 +1,8 @@
 # Week 4: executable checkpoint for 26 October
 
-For setup instructions, detailed output, a project explanation, and a presentation walkthrough, use the [demo guide](week04_demo_guide.md).
+This checkpoint (project progress demonstration) reconstructs AIS (Automatic Identification System) vessel observations. For setup, detailed output, and a presentation walkthrough, use the [demo guide](week04_demo_guide.md).
 
-The [week-three Lambda diagram](week03_architecture.md) shows the full target system. This checkpoint adds a runnable Spark **batch reconstruction slice** and a small dataset to Git. It exercises canonical observations → repartition by MMSI → sort by event time and stable IDs → per-vessel visit state machine → result checks. [Week two](week02_hadoop.md) separately demonstrates an HDFS write/read round trip on the local DataNode.
+The [week-three Lambda diagram](week03_architecture.md) (batch plus provisional streaming paths) shows the target system. This checkpoint adds Spark (a distributed processing engine) batch (fixed-input processing) reconstruction and sample data to Git (source version control). It uses canonical (normalized) observations, repartitioning (redistribution) by MMSI (Maritime Mobile Service Identity), event-time sorting, and a state machine (logic retaining information between observations). [Week two](week02_hadoop.md) separately demonstrates HDFS (Hadoop Distributed File System) reads/writes on a DataNode (a file-block storage process).
 
 ## Run from a fresh checkout
 
@@ -15,7 +15,7 @@ export PYTHONPATH="$PWD/src"
 python scripts/week04_checkpoint.py
 ```
 
-Use Ubuntu 24.04 / WSL2, Python 3.12, and Java 17. Run the commands below from the repository root; on the existing laptop, first run `cd /mnt/e/big_data`. The [README](../README.md) includes the clone command. After installing dependencies, the demo needs only the included fixtures and does not require Kafka, MongoDB, or the large NOAA file.
+Use Ubuntu 24.04 / WSL2 (Windows Subsystem for Linux, version 2), Python 3.12, and Java 17. Run from the repository root; on the laptop, first run `cd /mnt/e/big_data`. The [README](../README.md) includes cloning. Once dependencies are installed, only fixtures (test inputs with expected results) are needed, without Kafka (an event-streaming platform), MongoDB (a document database), or the full NOAA (National Oceanic and Atmospheric Administration) file.
 
 ```bash
 python3 -m venv .venv
@@ -24,7 +24,7 @@ python -m pip install -r requirements-week04.txt
 PYTHONPATH=src python scripts/week04_checkpoint.py
 ```
 
-The default output contains three readable tables: synthetic visits, the real NOAA excerpt visit, and checkpoint summary metrics. Add `--details` for a real-visit provenance table and the Spark physical plan. Use `--json` for the machine-readable summary instead. The real excerpt row count is measured and checked, rather than only reported as a constant.
+Default tables show synthetic visits (reconstructed periods of observed presence), a real excerpt (small data extract), and summary metrics. Add `--details` for provenance (links to source evidence) and the physical plan (Spark's executed operators). Use `--json` for JSON (JavaScript Object Notation, a structured text format). The real row count is measured and checked.
 
 The command reads `tests/fixtures/reference_cases.json` and `tests/fixtures/real_ais_excerpt.jsonl`. It fails if the Spark physical plan has no sort, if any synthetic rule case differs from its expected visit fields, or if the real excerpt yields a different result. The presentation output reports these checked values:
 
@@ -48,11 +48,13 @@ CHECKPOINT SUMMARY
 
 Release verification on 2026-10-25 exported the staged Git files to a clean directory and ran `PYTHONPATH=src python scripts/week04_checkpoint.py --details` using the existing WSL Python environment. The command exited 0 with the same summary. The clean directory contained only the Git release files, so the demo did not rely on unpublished project modules or the local full dataset.
 
-JSONL fixtures use LF line endings enforced by `.gitattributes`, so Git checkouts preserve the documented sample checksum on Windows and Linux.
+JSONL (JSON Lines, one JSON object per line) fixtures use LF (Line Feed) endings enforced by `.gitattributes`, preserving the sample checksum (file-integrity fingerprint) on Windows and Linux.
 
-This command is safe to repeat. It creates only ignored Spark temporary files under `data/` and does not publish to a database. The synthetic fixture uses predetermined port assignments to isolate the visit rules. The real excerpt retains the canonical assignment and quality flags generated from the recorded USACE boundary snapshot. Neither sample proves that every raw AIS position was assigned correctly.
+This command is safe to repeat. It creates only ignored Spark temporary files under `data/` and does not publish to a database. The synthetic fixture uses predetermined port assignments to isolate the visit rules. The real excerpt retains the canonical assignment and quality flags generated from the USACE (U.S. Army Corps of Engineers) boundary snapshot. Neither sample proves that every raw AIS position was assigned correctly.
 
 ## Data provenance and readiness
+
+The USACE boundary source is paired with NOAA OCM (Office for Coastal Management) GeoParquet (Parquet files carrying geographic metadata). SHA-256 (Secure Hash Algorithm with a 256-bit output) identifies file bytes. Source manifests (metadata records) also record MD5 (Message Digest 5) and CC0 (a public-domain dedication). Times are normalized to UTC (Coordinated Universal Time).
 
 The source is [NOAA OCM historical AIS GeoParquet for 2024](https://github.com/ocm-marinecadastre/ais-vessel-traffic/blob/main/data/ais-broadcast-points-2024-readme.md), with the [USACE **Ports** layer (ID 0)](https://services7.arcgis.com/n1YM8pTrFmm7L4hs/arcgis/rest/services/Port_Statistical_Area/FeatureServer/0) for boundaries. The service also has a separate [**PortStatisticalAreas** layer (ID 1)](https://services7.arcgis.com/n1YM8pTrFmm7L4hs/arcgis/rest/services/Port_Statistical_Area/FeatureServer/1); HarborTrace does not use it. Earlier project wording called the selected polygons “statistical port areas”; the precise term is **port boundaries from the Ports layer**. The local January 1 source snapshot is 227,181,435 bytes, SHA-256 `3124557f70bb216e3a4d5817cf019368a6ca47d86aec8d3d2aa8c8e6d1e92560`. Its local manifest records the provider URL, content MD5, CC0 license, and download time. The original boundary snapshot checksum is `3419b3badc0e5d5f31ccbe784e1476be60bdff4182edb06090f5401185bbc779`.
 

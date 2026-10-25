@@ -1,6 +1,8 @@
 # Week 3: data and evaluation contracts
 
-Contract version `1.0` for the [Lambda design](week03_architecture.md). Field names and identity rules below are the intended interfaces for later published code. Values describe *observations*, not verified arrival or berth times.
+Contract (shared data-field and validation requirements) version `1.0` for the [Lambda design](week03_architecture.md) (batch reconstruction plus provisional streaming). Field names and identity rules below are intended interfaces for later published code. Values describe *observations*, not verified arrival or berth times.
+
+MMSI (Maritime Mobile Service Identity) identifies maritime radio stations; UTC (Coordinated Universal Time) normalizes time; SHA-256 (Secure Hash Algorithm with a 256-bit output) provides hashes. A URL (Uniform Resource Locator) identifies a source location and an ID (identifier) distinguishes a record. Canonical observations (normalized records) and visits (reconstructed periods of observed presence) use these terms below.
 
 | Layer | Required fields or identity | Check |
 |---|---|---|
@@ -19,14 +21,14 @@ Contract version `1.0` for the [Lambda design](week03_architecture.md). Field na
 - The geometry predicate is `covers`, including an exact polygon boundary point. Near-boundary, overlapping, or repaired-boundary assignments carry flags; overlap alone does not prove membership in either port.
 - A candidate becomes confirmed after at least 10 minutes between observed inside points. Exit needs two outside observations at least 10 minutes apart. An observation gap greater than 30 minutes breaks continuity. The detailed transitions are in the [decision table](visit_decision_table.md).
 - Entry and exit are intervals constrained by observations. A missing preceding outside point left-censors entry; a missing confirmed exit right-censors the visit. `observed_span_seconds` is the difference between first and last observed inside points, not continuous occupancy.
-- A watermark may bound streaming state and exclude very late data. The replay audit and batch path retain the basis for correction. “Exactly once” is limited to explicitly tested sink/idempotency behavior; Kafka delivery alone cannot guarantee one business event.
+- A watermark (an event-time progress threshold) may bound streaming state and exclude very late data. Replay retention and batch preserve the basis for correction. “Exactly once” is limited to tested sink (output destination) and idempotency (unchanged effects on retry) behavior; Kafka (an event-streaming platform) delivery alone cannot guarantee one business event.
 
 ## Acceptance evidence for later milestones
 
-1. A small reference fixture covers normal entry/exit, short excursion, duplicate, conflicting position, boundary ambiguity, long gap, and left/right censoring. The Spark batch result must agree with the reference state machine on these cases.
+1. A reference fixture (test input with expected output) covers normal entry/exit, excursions, duplicates, conflicts, boundary ambiguity, gaps, and censoring (missing entry/exit evidence). Spark (a distributed processing engine) batch results must agree with the reference state machine (logic retaining state between observations).
 2. Source manifests account for all input rows, list reject reasons, and identify boundary and rule versions. Repeated batch runs over fixed inputs produce the same visit IDs and counts.
 3. Streaming checks inject delay and duplicate messages, restart from a checkpoint, and compare provisional versus reconciled results. Report state bounds and late records outside the watermark.
 4. Physical Spark plans and row-equivalence checks demonstrate broadcast and sort-merge joins, partition pruning, aggregation and cache decisions on measured input sizes.
 5. A publication test verifies count checks, one active generation, and consistent dashboard reads during a failed or retried write.
 
-The local two-port scope is a sample, not a representative estimate of all port congestion. MMSI may not uniquely identify a vessel over time, AIS coverage is incomplete, and port-area polygons are not berth boundaries. Human validation against independent evidence remains necessary.
+The two-port scope is not a representative estimate of all port congestion. MMSI may not uniquely identify a vessel over time, AIS (Automatic Identification System) coverage is incomplete, and port polygons (closed geographic boundaries) are not berth boundaries. Human validation against independent evidence remains necessary.

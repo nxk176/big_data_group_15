@@ -1,12 +1,12 @@
 # HarborTrace checkpoint: project explanation and demonstration guide
 
-This guide accompanies `scripts/week04_checkpoint.py`. The runnable checkpoint was verified on 25 October 2026 by exporting the Git release files to a clean directory and executing the demo in the existing WSL Python environment. It returned `PASS` with exit code 0.
+This guide accompanies `scripts/week04_checkpoint.py`. The checkpoint (project progress demonstration) was verified on 25 October 2026 by exporting the Git (source version-control system) release files to a clean directory and executing the demo in WSL (Windows Subsystem for Linux) with Python (the application's programming language). It returned `PASS` with exit code 0 (successful process completion).
 
 Start with part 0 for the problem and terminology. Parts 1-5 cover execution and results. Parts 6-9 explain Spark, data, architecture, and likely questions. Parts 10-13 provide an introduction, a source map, a five-minute demonstration, and a self-check.
 
 **0. The problem, inputs, and outputs**
 
-HarborTrace reconstructs observed vessel presence in the Los Angeles and Long Beach port areas from historical AIS positions. It transforms individual records of "which vessel, when, and where" into visits describing when a vessel was observed inside a port area, whether the observations meet the confirmation rule, and what evidence is missing.
+HarborTrace reconstructs observed vessel presence in the Los Angeles and Long Beach port areas from historical AIS (Automatic Identification System, which broadcasts vessel identity and position) observations. It transforms records of "which vessel, when, and where" into visits (periods of observed presence reconstructed under explicit rules), recording confirmation and missing evidence.
 
 A vessel can produce many position records during one period in a port area. Counting records therefore depends on reporting frequency and coverage. To identify periods of presence, the project groups observations by vessel, orders them by time, and applies explicit rules. Duplicates, missing observations, out-of-order arrivals, and boundary uncertainty complicate this reconstruction.
 
@@ -14,13 +14,13 @@ Visits can support summaries of observed activity by port and hour and distribut
 
 | Question | Project answer |
 |---|---|
-| What are the inputs? | Historical NOAA AIS positions and USACE port polygons. |
+| What are the inputs? | Historical NOAA (National Oceanic and Atmospheric Administration) positions and USACE (U.S. Army Corps of Engineers) port polygons (closed geographic shapes). |
 | What transformations are needed? | Validate and normalize records, assign positions to port areas, group by vessel and time, and apply visit rules. |
-| What are the outputs? | Visits with observed times, status, uncertainty flags, and source provenance; the target system also serves aggregates and a dashboard. |
-| What does this checkpoint execute? | Spark batch reconstruction from observations with existing port assignments, checked against expected results. |
+| What are the outputs? | Visits with observed times, status, uncertainty flags, and provenance (links to source evidence); the target system also serves aggregates (summarized results) and a dashboard (a visual data interface). |
+| What does this checkpoint execute? | Spark (a distributed data-processing engine) batch (processing a fixed input range) reconstruction from observations with existing port assignments, checked against expected results. |
 | Why a big data system? | Real daily inputs contain millions of records. Storage, processing by key, replay, and reconciliation must be evaluated beyond the small acceptance fixture. |
 
-Consider this synthetic sequence after port assignment:
+Consider this synthetic (deliberately constructed) sequence after port assignment. Times use UTC (Coordinated Universal Time):
 
 | Vessel | UTC time | Position relative to the port |
 |---|---|---|
@@ -35,7 +35,7 @@ These five observations produce one visit. The two inside observations are ten m
 | Term | Meaning in HarborTrace |
 |---|---|
 | AIS | Vessel identification and position observations; the project uses provider-processed NOAA historical records. |
-| MMSI | A maritime radio identifier used as the grouping key, with limitations as a vessel identity over time. |
+| MMSI (Maritime Mobile Service Identity) | A nine-digit maritime radio identifier used as the grouping key, with limitations as a vessel identity over time. |
 | Polygon | A geographic shape representing a selected port boundary. |
 | `assignment` | The port assigned to an observation: `4120` is Los Angeles and `4110` is Long Beach. In the fixture, `null` means outside the tested port. Real data can also be ambiguous, requiring flags. |
 | Canonical observation | A normalized record with UTC event time, coordinates, identities, assignment, and quality flags. |
@@ -46,7 +46,7 @@ These five observations produce one visit. The two inside observations are ten m
 | State | Information retained between observations, such as whether entry is confirmed or an exit is pending. |
 | Partition | A portion of data processed by a Spark task; a partition is not a physical worker machine. |
 
-The target system has batch and speed paths:
+The target uses Lambda architecture (a batch path plus a faster provisional streaming path). Its components include HDFS (Hadoop Distributed File System, distributed file storage), Kafka (an event-streaming platform), and MongoDB (a document database). Streaming (processing events as they arrive) is tested using replay (sending historical observations again):
 
 ```mermaid
 flowchart LR
@@ -73,7 +73,7 @@ The checkpoint command executes one business-processing slice. It uses existing 
 
 **1. Run the checkpoint**
 
-For a fresh checkout, use Ubuntu / WSL2, Python 3.12, and Java 17:
+For a fresh checkout, use Ubuntu (a Linux operating system), optionally through WSL2 (version 2 of Windows Subsystem for Linux), Python 3.12, and Java 17 (the runtime used by Spark). A venv (isolated Python environment) keeps dependencies separate:
 
 ```bash
 git clone https://github.com/nxk176/big_data_group_15.git
@@ -104,9 +104,9 @@ ls -lh tests/fixtures/reference_cases.json tests/fixtures/real_ais_excerpt.jsonl
 
 The fixture files are included in Git. The existing environment does not need to be recreated or reinstalled for each presentation. In a new terminal, repeat `cd`, `source`, and `export`. To explain the execution plan, run `python scripts/week04_checkpoint.py --details` after the main demonstration.
 
-`/mnt/e/big_data` is the WSL view of `E:\big_data`. `source` activates the Python environment. `PYTHONPATH=src` makes the project package available to the driver and Python workers. The default output is three readable terminal tables: synthetic visits, a real excerpt visit, and summary metrics. Use the default command when presenting.
+`/mnt/e/big_data` is the WSL view of `E:\big_data`. `source` activates the Python environment. `PYTHONPATH=src` makes the project package available to the driver (program coordinating Spark work) and Python workers (processes executing assigned work). The default output is three terminal (command-line interface) tables: synthetic visits, a real excerpt (small data extract) visit, and summary metrics. Use the default command when presenting.
 
-For a technical explanation, add `--details` to show a provenance table and the physical plan. For automated consumers, use `--json` to get only the machine-readable summary on standard output. These two optional flags are mutually exclusive.
+For a technical explanation, add `--details` to show a provenance table and the physical plan (the operators Spark executes). For automated consumers, use `--json` to get JSON (JavaScript Object Notation, a structured text data format) on standard output. These two optional flags are mutually exclusive.
 
 Verified runs took roughly 15-18 seconds on the laptop, with runtime depending on the environment. Output appears in the terminal. The script stops Spark when finished and does not launch a dashboard.
 
@@ -139,10 +139,10 @@ CHECKPOINT SUMMARY
 | Candidate synthetic visits: 1 | One synthetic visit has insufficient temporal evidence for confirmation. |
 | Real excerpt observations: 2 | The actual row count read from the real excerpt, checked by the script. |
 | Real excerpt visits: 1 | One separate real-data visit, excluded from the synthetic counts. |
-| Sort in physical plan: yes | The synthetic observation DataFrame's executed plan contains a `Sort` operator. |
+| Sort in physical plan: yes | The synthetic observation DataFrame (Spark's table-shaped dataset) has an executed plan containing a `Sort` operator. |
 | Result: PASS | Visit counts, the properties specified in the fixture, the sort check, and the real excerpt assertions passed. This is not a real-world accuracy score. |
 
-The first two output tables list individual visits. `First inside` and `Last inside` are UTC observations with dates displayed as MM-DD; `Span min` is their separation in minutes. `Missing bounds` shows `entry`, `exit`, `entry+exit`, or `none`, based on censoring. The real excerpt row has an 18-minute span and missing bounds at both ends. Optional provenance details retain the full ISO timestamps and source IDs.
+The first two output tables list individual visits. `First inside` and `Last inside` are UTC observations with dates displayed as MM-DD; `Span min` is their separation in minutes. `Missing bounds` shows `entry`, `exit`, `entry+exit`, or `none`, based on censoring (missing evidence for an interval bound). The real excerpt row has an 18-minute span and missing bounds at both ends. Optional provenance retains ISO 8601 (an international date/time standard) timestamps and source IDs (identifiers).
 
 **3. Visit rules and state**
 
@@ -214,7 +214,7 @@ flowchart LR
 
 `sortWithinPartitions("mmsi", "event_time", "logical_id", "source_record_id")` establishes the sequence required by the state machine. Canonical timestamps in the demo use a consistent UTC ISO representation. Stable IDs break ties. In the plan, `Exchange hashpartitioning(mmsi, 2)` performs redistribution and `Sort [...]` orders each partition. This is not a global sort.
 
-`mapPartitions` applies the state machine to a partition iterator. When MMSI changes, it closes the previous vessel's state and initializes the next one. The code uses RDD `mapPartitions` for sequential stateful logic, rather than a SQL UDF. Trade-offs include Python/JVM serialization and reduced Catalyst visibility inside the Python function.
+`mapPartitions` applies the state machine to a partition iterator. When MMSI changes, it closes the previous vessel's state and initializes the next one. It uses RDD (Resilient Distributed Dataset, Spark's distributed collection) `mapPartitions` for sequential stateful logic rather than a SQL (Structured Query Language) UDF (user-defined function). Trade-offs include Python/JVM (Java Virtual Machine) serialization and reduced Catalyst (Spark's query optimizer) visibility inside the Python function.
 
 `local[2]` runs Spark on the laptop with up to two concurrent tasks; it is not a two-machine deployment. The demo collects a few output rows to the driver for assertions. Large results should be written to storage rather than collected wholesale. This fixture is an acceptance check, not a scalability benchmark.
 
@@ -224,7 +224,7 @@ Primary documentation: [sortWithinPartitions](https://spark.apache.org/docs/3.5.
 
 NOAA 2024 AIS is provider-processed historical data. The boundary snapshot uses the USACE **Ports layer, ID 0**; PortStatisticalAreas is a separate ID 1 layer.
 
-The local pilot for 1 January 2024 contains:
+The local pilot (initial real-data trial) for 1 January 2024 uses Parquet (a column-oriented file format) and contains:
 
 - `data/source/ais-2024-01-01.parquet`: 227,181,435 bytes and 7,293,408 source rows.
 - `data/canonical/ais-2024-01-01-regional.parquet`: 235,713 regional observations, including outside-polygon observations retained within the selected region to support entry/exit reconstruction.
@@ -232,7 +232,7 @@ The local pilot for 1 January 2024 contains:
 - Previously measured full-pilot batch output: 370 visits, comprising 271 reconciled and 99 candidates. The checkpoint command does not rebuild that full output.
 - A two-row canonical excerpt included in Git, alongside the separate synthetic scenarios.
 
-The local prototype prepares source data using PyArrow/SQLite and Shapely. Spark reconstructs visits and performs batch analytics. The checkpoint receives existing assignments and does not rerun spatial classification. SHA-256 verifies a specific file's bytes, not the correctness of observations or business conclusions.
+The local prototype prepares data using PyArrow (a columnar-data library), SQLite (a file-based database), and Shapely (a geometry library). Spark reconstructs visits and performs batch analytics. The checkpoint receives existing assignments and does not rerun spatial classification. SHA-256 (Secure Hash Algorithm with a 256-bit output) verifies a file's bytes, not the correctness of observations or business conclusions. The committed excerpt uses JSONL (JSON Lines, one JSON object per line).
 
 Synthetic fixture coordinates are placeholders; assignments are specified by the scenario. Two synthetic events can therefore share placeholder coordinates while having different assignments. This deliberately isolates the state-machine tests from geometry. The real excerpt retains canonical coordinates, assignments, identities, and quality flags. Neither sample retests the point-in-polygon implementation.
 
@@ -259,7 +259,7 @@ This command exercises only the batch reconstruction slice on local files. The [
 | Is exactly-once already demonstrated? | This batch demo does not test streaming delivery/sink guarantees. Identities, checkpoint recovery, and sink idempotency need separate evidence. |
 | Why retain candidates? | They preserve limited evidence without treating it as confirmed activity. Default confirmed aggregates exclude them. |
 | Why flag a repaired polygon? | The Los Angeles source geometry was invalid. Original bytes remain intact; derived repair can change assignment and must remain visible. |
-| Does the checkpoint finish the course project? | It provides executable code, data examples/provenance, and architecture. Broader Spark, streaming, evaluation, and Kubernetes/cloud deployment requirements still need their own releases and evidence. |
+| Does the checkpoint finish the course project? | It provides executable code, data examples/provenance, and architecture. Broader processing, evaluation, and Kubernetes (container orchestration)/cloud deployment still need their own releases and evidence. |
 
 **10. Suggested introduction and troubleshooting**
 
@@ -280,7 +280,7 @@ Known hostname and `NativeCodeLoader` warnings occurred in successful local runs
 | Visit rules | [visits.py](../src/harbortrace/visits.py) | `Rules` holds thresholds; `VisitMachine.feed()` handles observations. |
 | Visit output | [visits.py](../src/harbortrace/visits.py) | `_finish()` creates visits and flags; `close()` ends an active input range. |
 | Data contracts | [contracts.py](../src/harbortrace/contracts.py) | `Observation`, `Visit`, and the `digest()` identity helper. |
-| Dependencies | [requirements-week04.txt](../requirements-week04.txt) | Pinned PySpark and Py4J versions. |
+| Dependencies | [requirements-week04.txt](../requirements-week04.txt) | Pinned PySpark (Python interface to Spark) and Py4J (Python-to-Java bridge) versions. |
 
 The driver computes and checks results in this order:
 
