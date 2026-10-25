@@ -81,13 +81,13 @@ cd big_data_group_15
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-week04.txt
-PYTHONPATH=src python scripts/week04_checkpoint.py --details
+PYTHONPATH=src python scripts/week04_checkpoint.py
 ```
 
 If the repository is already present, run the environment and demo commands from its root. On the existing project laptop, the following PowerShell command uses the already installed environment:
 
 ```powershell
-wsl.exe -- bash -lc 'cd /mnt/e/big_data && source ~/.venvs/harbortrace/bin/activate && PYTHONPATH=src python scripts/week04_checkpoint.py --details'
+wsl.exe -- bash -lc 'cd /mnt/e/big_data && source ~/.venvs/harbortrace/bin/activate && PYTHONPATH=src python scripts/week04_checkpoint.py'
 ```
 
 Or enter Ubuntu with `wsl` and run:
@@ -95,40 +95,48 @@ Or enter Ubuntu with `wsl` and run:
 ```bash
 cd /mnt/e/big_data
 source ~/.venvs/harbortrace/bin/activate
-PYTHONPATH=src python scripts/week04_checkpoint.py --details
+PYTHONPATH=src python scripts/week04_checkpoint.py
 ```
 
-`/mnt/e/big_data` is the WSL view of `E:\big_data`. `source` activates the Python environment. `PYTHONPATH=src` makes the project package available to the driver and Python workers. `--details` prints individual visits, the physical plan, and the real excerpt result; omit it for the summary alone.
+`/mnt/e/big_data` is the WSL view of `E:\big_data`. `source` activates the Python environment. `PYTHONPATH=src` makes the project package available to the driver and Python workers. The default output is three readable terminal tables: synthetic visits, a real excerpt visit, and summary metrics. Use the default command when presenting.
+
+For a technical explanation, add `--details` to show a provenance table and the physical plan. For automated consumers, use `--json` to get only the machine-readable summary on standard output. These two optional flags are mutually exclusive.
 
 Verified runs took roughly 15-18 seconds on the laptop, with runtime depending on the environment. Output appears in the terminal. The script stops Spark when finished and does not launch a dashboard.
 
 **2. Interpret the summary**
 
-```json
-{
-  "fixture_cases": 5,
-  "input_observations": 23,
-  "real_excerpt_observations": 2,
-  "real_excerpt_visits": 1,
-  "result": "PASS",
-  "sort_in_physical_plan": true,
-  "spark_version": "3.5.7",
-  "status_counts": {"candidate": 1, "reconciled": 5},
-  "visits": 6
-}
+```text
+CHECKPOINT SUMMARY
++-----------------------------+-------+
+| Metric                      | Value |
++-----------------------------+-------+
+| Synthetic scenarios checked | 5     |
+| Synthetic observations      | 23    |
+| Synthetic visits            | 6     |
+| Reconciled synthetic visits | 5     |
+| Candidate synthetic visits  | 1     |
+| Real excerpt observations   | 2     |
+| Real excerpt visits         | 1     |
+| Sort in physical plan       | yes   |
+| Spark version               | 3.5.7 |
+| Result                      | PASS  |
++-----------------------------+-------+
 ```
 
 | Field | Interpretation |
 |---|---|
-| `fixture_cases: 5` | Five designed scenarios with expected results in JSON. |
-| `input_observations: 23` | Synthetic observations only; excludes the two real records. |
-| `visits: 6` | Synthetic output visits. The long-gap scenario produces two visits. |
-| `reconciled: 5` | Five synthetic visits satisfy the observed-presence confirmation rule. |
-| `candidate: 1` | One synthetic visit has insufficient temporal evidence for confirmation. |
-| `real_excerpt_observations: 2` | The actual row count read from the real excerpt, checked by the script. |
-| `real_excerpt_visits: 1` | One separate real-data visit, excluded from `visits` and `status_counts` above. |
-| `sort_in_physical_plan: true` | The synthetic observation DataFrame's executed plan contains a `Sort` operator. |
-| `result: PASS` | Visit counts, the properties specified in the fixture, the sort check, and the real excerpt assertions passed. This is not a real-world accuracy score. |
+| Synthetic scenarios checked: 5 | Five designed scenarios with expected results in the input fixture. |
+| Synthetic observations: 23 | Synthetic observations only; excludes the two real records. |
+| Synthetic visits: 6 | Synthetic output visits. The long-gap scenario produces two visits. |
+| Reconciled synthetic visits: 5 | Five synthetic visits satisfy the observed-presence confirmation rule. |
+| Candidate synthetic visits: 1 | One synthetic visit has insufficient temporal evidence for confirmation. |
+| Real excerpt observations: 2 | The actual row count read from the real excerpt, checked by the script. |
+| Real excerpt visits: 1 | One separate real-data visit, excluded from the synthetic counts. |
+| Sort in physical plan: yes | The synthetic observation DataFrame's executed plan contains a `Sort` operator. |
+| Result: PASS | Visit counts, the properties specified in the fixture, the sort check, and the real excerpt assertions passed. This is not a real-world accuracy score. |
+
+The first two output tables list individual visits. `First inside` and `Last inside` are UTC observations with dates displayed as MM-DD; `Span min` is their separation in minutes. `Missing bounds` shows `entry`, `exit`, `entry+exit`, or `none`, based on censoring. The real excerpt row has an 18-minute span and missing bounds at both ends. Optional provenance details retain the full ISO timestamps and source IDs.
 
 **3. Visit rules and state**
 
@@ -276,7 +284,7 @@ The driver computes and checks results in this order:
 4. Repartition by MMSI, sort, and reconstruct visits using the partition iterator.
 5. Collect the small output and compare visit counts and the properties specified by `expected`; raise `AssertionError` on a mismatch.
 6. Verify that the real excerpt has two observations yielding one reconciled, 1,080-second visit with both ends censored.
-7. Print optional details and the summary, and stop Spark in `finally`.
+7. Print the visit and summary tables; optionally add provenance/plan details or select JSON summary mode. Stop Spark in `finally`.
 
 The synthetic driver uses `parallelize` because the fixture is deliberately small. The full local batch instead reads canonical Parquet. Collecting a handful of acceptance-test results does not justify collecting the full dataset into driver memory.
 
@@ -290,9 +298,9 @@ Prepare the architecture preview, a terminal, the fixture, and `spark_core.py`. 
 |---|---|---|
 | 0:00-0:45 | Open the architecture. | Position observations become visits; today's executable slice is Spark batch. |
 | 0:45-1:20 | Open fixture and real excerpt. | Designed cases provide expected answers; the excerpt comes from canonical NOAA data. |
-| 1:20-2:00 | Run the demo with `--details`. | Group by vessel, sort by event time, and update visit state. |
+| 1:20-2:00 | Run the default demo command to show the tables. | Group by vessel, sort by event time, and update visit state. |
 | 2:00-3:00 | Show normal, long-gap, and summary output. | Five scenarios produce six visits because the long gap splits one scenario. |
-| 3:00-4:00 | Show the real visit JSON. | Eighteen minutes confirms presence, while missing outside evidence censors both ends. |
+| 3:00-4:00 | Show the real NOAA visit table. | Eighteen minutes confirms presence, while missing outside evidence censors both ends. |
 | 4:00-5:00 | Open `reconstruct_frame()`. | Identify actual shuffle/sort operators and describe the next ingestion, streaming, serving, and evaluation milestones. |
 
 On the existing laptop, inspect the local full-pilot evidence from PowerShell without redownloading data:

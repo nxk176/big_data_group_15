@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 from harbortrace.config import Config
@@ -16,9 +17,47 @@ FIXTURE = ROOT / "tests" / "fixtures" / "reference_cases.json"
 REAL_EXCERPT = ROOT / "tests" / "fixtures" / "real_ais_excerpt.jsonl"
 
 
+def print_table(title: str, headers: list[str], rows: list[list]) -> None:
+    values = [[str(value) for value in row] for row in rows]
+    widths = [max([len(header)] + [len(row[index]) for row in values])
+              for index, header in enumerate(headers)]
+    border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+
+    def line(row):
+        return "| " + " | ".join(value.ljust(width) for value, width in zip(row, widths)) + " |"
+
+    print(f"\n{title}")
+    print(border)
+    print(line(headers))
+    print(border)
+    for row in values:
+        print(line(row))
+    print(border)
+
+
+def short_time(value: str) -> str:
+    return datetime.fromisoformat(value).strftime("%m-%d %H:%M:%S")
+
+
+def missing_bounds(visit: dict) -> str:
+    labels = []
+    if visit["left_censored"]:
+        labels.append("entry")
+    if visit["right_censored"]:
+        labels.append("exit")
+    return "+".join(labels) or "none"
+
+
+def visit_cells(visit: dict) -> list:
+    return [short_time(visit["first_inside"]), short_time(visit["last_inside"]),
+            f"{visit['observed_span_seconds'] / 60:.1f}", visit["status"], missing_bounds(visit)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--details", action="store_true", help="Show case results, the Spark plan, and real visit fields")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--details", action="store_true", help="Add the Spark plan and real-visit provenance to the tables")
+    output.add_argument("--json", action="store_true", help="Print only the machine-readable JSON summary")
     args = parser.parse_args()
     specs = json.loads(FIXTURE.read_text(encoding="utf-8"))
     observations = []
@@ -52,6 +91,7 @@ def main() -> None:
         actual_by_mmsi = {}
         for row in visits.collect():
             actual_by_mmsi.setdefault(row.mmsi, []).append(row.asDict(recursive=True))
+        case_visits = []
         for case_number, (case, spec) in enumerate(specs.items(), start=1):
             mmsi = f"900000{case_number:03d}"
             actual = sorted(actual_by_mmsi.get(mmsi, []), key=lambda row: row["first_inside"])
@@ -64,12 +104,7 @@ def main() -> None:
                             raise AssertionError(f"{case}: missing quality flag {value}")
                     elif visit[field] != value:
                         raise AssertionError(f"{case}: {field} = {visit[field]!r}, expected {value!r}")
-            if args.details:
-                for visit in actual:
-                    print(json.dumps({"case": case, **{field: visit[field] for field in (
-                        "first_inside", "last_inside", "observed_span_seconds", "status",
-                        "left_censored", "right_censored", "quality_flags",
-                    )}}, sort_keys=True))
+            case_visits.extend((case, visit) for visit in actual)
         counts = Counter(row["status"] for rows in actual_by_mmsi.values() for row in rows)
         real_frame = spark.read.json(str(REAL_EXCERPT))
         real_input_count = real_frame.count()
@@ -86,17 +121,49 @@ def main() -> None:
                 real_visit["left_censored"], real_visit["right_censored"]) != (
                 "reconciled", "4120", 1080, True, True):
             raise AssertionError(f"Unexpected real AIS excerpt result: {real_visit}")
-        if args.details:
-            print("Spark physical plan for the synthetic fixture:")
-            print(plan)
-            print(json.dumps({"real_excerpt_visit": real_visit}, indent=2, sort_keys=True))
-        print(json.dumps({
+        summary = {
             "result": "PASS", "spark_version": spark.version,
             "fixture_cases": len(specs), "input_observations": len(observations),
             "visits": sum(counts.values()), "status_counts": dict(counts),
             "sort_in_physical_plan": True, "real_excerpt_observations": real_input_count,
             "real_excerpt_visits": len(real_rows),
-        }, sort_keys=True))
+        }
+        if args.json:
+            print(json.dumps(summary, sort_keys=True))
+        else:
+            print("\nHARBORTRACE - WEEK 4 CHECKPOINT")
+            print("Times are UTC; dates are MM-DD. Span is measured between observed inside points.")
+            headers = ["First inside", "Last inside", "Span min", "Status", "Missing bounds"]
+            print_table("SYNTHETIC VISITS", ["Case"] + headers,
+                        [[case] + visit_cells(visit) for case, visit in case_visits])
+            print_table("REAL NOAA EXCERPT", ["MMSI", "Port"] + headers,
+                        [[real_visit["mmsi"], real_visit["port_id"] + " (LA)"] + visit_cells(real_visit)])
+            print_table("CHECKPOINT SUMMARY", ["Metric", "Value"], [
+                ["Synthetic scenarios checked", len(specs)],
+                ["Synthetic observations", len(observations)],
+                ["Synthetic visits", summary["visits"]],
+                ["Reconciled synthetic visits", counts["reconciled"]],
+                ["Candidate synthetic visits", counts["candidate"]],
+                ["Real excerpt observations", real_input_count],
+                ["Real excerpt visits", len(real_rows)],
+                ["Sort in physical plan", "yes"],
+                ["Spark version", spark.version],
+                ["Result", summary["result"]],
+            ])
+            print("Missing entry/exit bounds mean that supporting outside observations are absent.")
+            if args.details:
+                fields = ["visit_id", "possible_entry_after", "possible_entry_by", "possible_exit_after",
+                          "possible_exit_by", "observation_count", "maximum_gap_seconds", "rule_version",
+                          "source_digest"]
+                provenance = [[field, real_visit[field] if real_visit[field] is not None else "unknown"]
+                              for field in fields]
+                provenance.append(["quality_flags", ", ".join(real_visit["quality_flags"])])
+                provenance.extend([f"source_record_{index}", value]
+                                  for index, value in enumerate(real_visit["source_record_ids"], start=1))
+                print_table("REAL VISIT PROVENANCE", ["Field", "Value"], provenance)
+                print("\nSPARK PHYSICAL PLAN")
+                print(plan)
+            print("RESULT: PASS - all fixture and real-excerpt checks passed.")
     finally:
         spark.stop()
 

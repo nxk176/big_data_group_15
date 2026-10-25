@@ -14,18 +14,32 @@ cd big_data_group_15
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-week04.txt
-PYTHONPATH=src python scripts/week04_checkpoint.py --details
+PYTHONPATH=src python scripts/week04_checkpoint.py
 ```
 
 If the repository is already present, run the setup and demo commands from its root. The laptop's existing environment and an explanation of every result are in the [demo guide](docs/week04_demo_guide.md). The demo runs locally and does not require HDFS, Kafka, or MongoDB to be started.
 
-Expected final output:
+The command prints synthetic visit, real NOAA excerpt, and summary tables. The summary is:
 
-```json
-{"fixture_cases":5,"input_observations":23,"real_excerpt_observations":2,"real_excerpt_visits":1,"result":"PASS","sort_in_physical_plan":true,"spark_version":"3.5.7","status_counts":{"candidate":1,"reconciled":5},"visits":6}
+```text
+CHECKPOINT SUMMARY
++-----------------------------+-------+
+| Metric                      | Value |
++-----------------------------+-------+
+| Synthetic scenarios checked | 5     |
+| Synthetic observations      | 23    |
+| Synthetic visits            | 6     |
+| Reconciled synthetic visits | 5     |
+| Candidate synthetic visits  | 1     |
+| Real excerpt observations   | 2     |
+| Real excerpt visits         | 1     |
+| Sort in physical plan       | yes   |
+| Spark version               | 3.5.7 |
+| Result                      | PASS  |
++-----------------------------+-------+
 ```
 
-Spark repartitions by MMSI, sorts observations within partitions, and applies the visit state machine. The command checks the expected fields for five synthetic scenarios and one real excerpt visit. `--details` prints case results, the physical plan, and the real visit. `PASS` verifies these bounded checks; it does not measure accuracy or scalability on the full dataset.
+Spark repartitions by MMSI, sorts observations within partitions, and applies the visit state machine. The command checks the expected fields for five synthetic scenarios and one real excerpt visit. The default output is formatted for a terminal presentation. Add `--details` for a provenance table and physical plan, or `--json` for the machine-readable summary. `PASS` verifies these bounded checks; it does not measure accuracy or scalability on the full dataset.
 
 ## Data and architecture
 

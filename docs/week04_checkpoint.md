@@ -15,12 +15,26 @@ python -m pip install -r requirements-week04.txt
 PYTHONPATH=src python scripts/week04_checkpoint.py
 ```
 
-Add `--details` to print each fixture visit, the Spark physical plan, and the real excerpt visit. The real excerpt row count is measured and checked, rather than only reported as a constant.
+The default output contains three readable tables: synthetic visits, the real NOAA excerpt visit, and checkpoint summary metrics. Add `--details` for a real-visit provenance table and the Spark physical plan. Use `--json` for the machine-readable summary instead. The real excerpt row count is measured and checked, rather than only reported as a constant.
 
-The command reads `tests/fixtures/reference_cases.json` and `tests/fixtures/real_ais_excerpt.jsonl`. It fails if the Spark physical plan has no sort, if any synthetic rule case differs from its expected visit fields, or if the real excerpt yields a different result. On 2026-10-22, Spark 3.5.7 returned:
+The command reads `tests/fixtures/reference_cases.json` and `tests/fixtures/real_ais_excerpt.jsonl`. It fails if the Spark physical plan has no sort, if any synthetic rule case differs from its expected visit fields, or if the real excerpt yields a different result. The presentation output reports these checked values:
 
-```json
-{"fixture_cases":5,"input_observations":23,"real_excerpt_observations":2,"real_excerpt_visits":1,"result":"PASS","sort_in_physical_plan":true,"spark_version":"3.5.7","status_counts":{"candidate":1,"reconciled":5},"visits":6}
+```text
+CHECKPOINT SUMMARY
++-----------------------------+-------+
+| Metric                      | Value |
++-----------------------------+-------+
+| Synthetic scenarios checked | 5     |
+| Synthetic observations      | 23    |
+| Synthetic visits            | 6     |
+| Reconciled synthetic visits | 5     |
+| Candidate synthetic visits  | 1     |
+| Real excerpt observations   | 2     |
+| Real excerpt visits         | 1     |
+| Sort in physical plan       | yes   |
+| Spark version               | 3.5.7 |
+| Result                      | PASS  |
++-----------------------------+-------+
 ```
 
 Release verification on 2026-10-25 exported the staged Git files to a clean directory and ran `PYTHONPATH=src python scripts/week04_checkpoint.py --details` using the existing WSL Python environment. The command exited 0 with the same summary. The clean directory contained only the Git release files, so the demo did not rely on unpublished project modules or the local full dataset.
