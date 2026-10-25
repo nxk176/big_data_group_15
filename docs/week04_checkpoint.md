@@ -1,6 +1,6 @@
 # Week 4: executable checkpoint for 26 October
 
-For the laptop's existing environment, detailed output, and a Vietnamese explanation of every result, use the [Vietnamese demo guide](week04_demo_guide_vi.md).
+For setup instructions, detailed output, a project explanation, and a presentation walkthrough, use the [demo guide](week04_demo_guide.md).
 
 The [week-three Lambda diagram](week03_architecture.md) shows the full target system. This checkpoint adds a runnable Spark **batch reconstruction slice** and a small dataset to Git. It exercises canonical observations → repartition by MMSI → sort by event time and stable IDs → per-vessel visit state machine → result checks. [Week two](week02_hadoop.md) separately demonstrates an HDFS write/read round trip on the local DataNode.
 

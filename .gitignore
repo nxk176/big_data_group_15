@@ -8,3 +8,5 @@ logs/
 checkpoints/
 reports/generated/
 *.egg-info/
+# Private local reading notes
+/docs/week04_demo_guide_vi.md

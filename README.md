@@ -17,7 +17,7 @@ python -m pip install -r requirements-week04.txt
 PYTHONPATH=src python scripts/week04_checkpoint.py --details
 ```
 
-If the repository is already present, run the setup and demo commands from its root. The laptop's existing environment and an explanation of every result are in the [Vietnamese demo guide](docs/week04_demo_guide_vi.md). The demo runs locally and does not require HDFS, Kafka, or MongoDB to be started.
+If the repository is already present, run the setup and demo commands from its root. The laptop's existing environment and an explanation of every result are in the [demo guide](docs/week04_demo_guide.md). The demo runs locally and does not require HDFS, Kafka, or MongoDB to be started.
 
 Expected final output:
 
