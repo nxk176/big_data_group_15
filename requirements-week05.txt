@@ -1,0 +1,6 @@
+# Week 5: source acquisition, spatial preparation and Spark reconstruction.
+-r requirements-week04.txt
+pyarrow==17.0.0
+shapely==2.0.6
+requests==2.32.3
+pytest==8.3.3

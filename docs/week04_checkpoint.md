@@ -6,6 +6,8 @@ The [week-three Lambda diagram](week03_architecture.md) (batch plus provisional 
 
 ## Run from a fresh checkout
 
+The lecturer's first-checkpoint instruction is to show progress with Git ready, executable code, data and system architecture. For 26 October, show the repository and run the command below, identify the included inputs and local official datasets, and explain `docs/week03_architecture.md`. This is a progress checkpoint; the complete final rubric is a later acceptance target.
+
 If the existing laptop environment is already installed, open Ubuntu directly and run:
 
 ```bash

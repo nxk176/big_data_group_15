@@ -4,7 +4,37 @@ HarborTrace reconstructs **observed vessel presence in the Los Angeles and Long 
 
 The **26 October checkpoint** includes executable Spark batch reconstruction, a synthetic dataset with expected results, a small real NOAA excerpt, and the [system architecture](docs/week03_architecture.md).
 
-## Run the checkpoint
+## Run week 5: ingestion and spatial preparation
+
+Week five makes the stage before reconstruction executable: validate position records, assign ports from geographic boundaries, quarantine rejected rows and feed normalized Parquet into Spark. The included example is synthetic and runs without downloading data or starting services.
+
+From a fresh checkout in Ubuntu with Python 3.12 and Java 17:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-week05.txt
+PYTHONPATH=src python scripts/week05_ingestion.py
+```
+
+On the existing laptop:
+
+```bash
+cd /mnt/e/big_data
+source ~/.venvs/harbortrace/bin/activate
+export PYTHONPATH="$PWD/src"
+python scripts/week05_ingestion.py
+```
+
+Expected: 14 input observations account for 7 normalized rows, 3 invalid rows, 1 duplicate, 2 conflicting positions and 1 outside-region row; Spark reconstructs 2 confirmed observed-presence records. Each run saves a manifest (input/run metadata), rejected-row audit, visits and physical plan under ignored `data/week05/`.
+
+See the [week-five guide](docs/week05_ingestion.md) for the complete processing path, optional reviewed real pilot (7,293,408 source rows), explicit acquisition command and limitations. Run the reference checks with:
+
+```bash
+PYTHONPATH=src python -m pytest tests/unit/test_reference.py -q
+```
+
+## Run the week-four checkpoint
 
 Use Ubuntu / WSL2 (Windows Subsystem for Linux, version 2), Python 3.12, and Java 17. PySpark (the Python interface to Spark) runs the processing code. From a fresh checkout:
 

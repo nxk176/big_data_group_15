@@ -1,0 +1,34 @@
+{
+  "kind": "synthetic",
+  "description": "A fictional square port and raw-shaped observations; not NOAA/USACE measurements.",
+  "ports": {
+    "type": "FeatureCollection",
+    "features": [{
+      "type": "Feature",
+      "properties": {"PORTIDPK": 9001, "FEATURENAME": "Synthetic port", "DATA_YEAR": 2024},
+      "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}
+    }]
+  },
+  "rows": [
+    {"mmsi": "123456789", "base_date_time": "2024-01-01T00:15:00Z", "point": [0.6, 0.5], "sog": 2.0},
+    {"mmsi": "123456789", "base_date_time": "2024-01-01T00:00:00Z", "point": [-0.2, 0.5], "sog": 2.0},
+    {"mmsi": "123456789", "base_date_time": "2024-01-01T00:05:00Z", "point": [0.5, 0.5], "sog": 2.0},
+    {"mmsi": "123456789", "base_date_time": "2024-01-01T00:30:00Z", "point": [-0.25, 0.5], "sog": 2.0},
+    {"mmsi": "123456789", "base_date_time": "2024-01-01T00:20:00Z", "point": [-0.2, 0.5], "sog": 2.0},
+    {"mmsi": "123456789", "base_date_time": "2024-01-01T00:05:00Z", "point": [0.5, 0.5], "sog": 2.0},
+    {"mmsi": "111222333", "base_date_time": "2024-01-01T00:07:00Z", "point": [0.4, 0.4], "sog": 2.0},
+    {"mmsi": "111222333", "base_date_time": "2024-01-01T00:07:00Z", "point": [0.8, 0.8], "sog": 2.0},
+    {"mmsi": "123", "base_date_time": "2024-01-01T00:00:00Z", "point": [0.5, 0.5], "sog": 2.0},
+    {"mmsi": "222333444", "base_date_time": "2024-01-01T00:00:00Z", "point": [999, 0.5], "sog": 2.0},
+    {"mmsi": "333444555", "base_date_time": null, "point": [0.5, 0.5], "sog": 2.0},
+    {"mmsi": "444555666", "base_date_time": "2024-01-01T00:00:00Z", "point": [10, 10], "sog": 2.0},
+    {"mmsi": "987654321", "base_date_time": "2024-01-01T00:10:00Z", "point": [0.01, 0.5], "sog": 0.0},
+    {"mmsi": "987654321", "base_date_time": "2024-01-01T00:00:00Z", "point": [0, 0.5], "sog": 0.0}
+  ],
+  "expected_accounting": {"source_rows": 14, "canonical_rows": 7, "duplicate_rows": 1, "conflict_rows": 2, "invalid": 3, "outside_region": 1},
+  "expected_quarantine": {"duplicate": 1, "same_time_position_conflict": 2, "invalid_mmsi": 1, "invalid_coordinates": 1, "missing_event_time": 1},
+  "expected_visits": [
+    {"mmsi": "123456789", "port_id": "9001", "observed_span_seconds": 600, "status": "reconciled", "left_censored": false, "right_censored": false, "possible_entry_after": "2024-01-01T00:00:00+00:00", "possible_entry_by": "2024-01-01T00:05:00+00:00", "possible_exit_after": "2024-01-01T00:15:00+00:00", "possible_exit_by": "2024-01-01T00:20:00+00:00"},
+    {"mmsi": "987654321", "port_id": "9001", "observed_span_seconds": 600, "status": "reconciled", "left_censored": true, "right_censored": true, "quality_flag": "near_boundary"}
+  ]
+}
