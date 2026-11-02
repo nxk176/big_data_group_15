@@ -20,6 +20,20 @@ The components share [versioned data contracts](docs/week03_contracts.md). Each 
 
 Members author their own changes and review one another's work. Integration defects are resolved by the owner of the affected component. Commit descriptions and test evidence identify the actual change, including adaptations of existing prototype code. Published milestones below document what can currently be run and the limits of its verification.
 
+## Run the serving and analytics component
+
+The serving component validates completed batch outputs and publishes them as immutable MongoDB generations with a single active pointer. It also applies provisional streaming updates, serves a read-only dashboard and runs Spark analytics (window functions, pivot/unpivot, UDF and custom aggregates, join plans, time series, MLlib behind a usable-sample gate, and a port-transition graph). The commands below use only synthetic fixtures and need no MongoDB server:
+
+```bash
+python -m pip install -r requirements-serving.txt
+python -m pytest -q
+PYTHONPATH=src python scripts/serving_import.py --memory demo
+PYTHONPATH=src:. python scripts/serve_dashboard.py --memory --load-fixtures
+PYTHONPATH=src python scripts/analytics_run.py --synthetic
+```
+
+The [serving and analytics guide](docs/serving_analytics_guide.md) covers the boundary formats, MongoDB commands, observed results and the evidence still required. Real-data and deployment evidence is still outstanding.
+
 ## Run week 5: ingestion and spatial preparation
 
 Week five makes the stage before reconstruction executable: validate position records, assign ports from geographic boundaries, quarantine rejected rows and feed normalized Parquet into Spark. The included example is synthetic and runs without downloading data or starting services.
