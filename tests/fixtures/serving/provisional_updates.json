@@ -1,0 +1,381 @@
+{
+  "description": "Provisional cohort updates in delivery order with expected outcomes and resulting cohort.",
+  "steps": [
+    {
+      "expect": "applied",
+      "update": {
+        "cohort_id": "synthetic-stream:4120",
+        "contract_version": "1.0",
+        "deleted_visit_ids": [],
+        "emitted_at": "2026-11-02T00:00:00+00:00",
+        "mode": "snapshot",
+        "seq": 1,
+        "update_id": "6fcc88f6f3107c0d4f3385e9c8e38e5a430433e8aa1e8ae3c103c9b5eae98d07",
+        "visits": [
+          {
+            "first_inside": "2024-01-01T23:55:00+00:00",
+            "last_inside": "2024-01-02T00:05:00+00:00",
+            "left_censored": false,
+            "maximum_gap_seconds": 600,
+            "mmsi": "990000000",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": "2024-01-01T23:45:00+00:00",
+            "possible_entry_by": "2024-01-01T23:55:00+00:00",
+            "possible_exit_after": "2024-01-02T00:05:00+00:00",
+            "possible_exit_by": "2024-01-02T00:10:00+00:00",
+            "quality_flags": [],
+            "right_censored": false,
+            "rule_version": "visits-v1",
+            "source_digest": "07b7b261b57016d69ce860e7d545edfe279168ecca3c82213ff46e79484c854c",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "32df895fdcf42e0cfe545253948ca58c2d4c6345e3ad938460dcf57be0c55bb0",
+              "21fab5aae4a9191c9648e1817bb23f8118cd12e51171d823b4de164bbda3bae0"
+            ],
+            "status": "reconciled",
+            "visit_id": "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+          },
+          {
+            "first_inside": "2024-01-01T00:00:00+00:00",
+            "last_inside": "2024-01-01T00:10:00+00:00",
+            "left_censored": true,
+            "maximum_gap_seconds": 600,
+            "mmsi": "990000001",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": null,
+            "possible_entry_by": "2024-01-01T00:00:00+00:00",
+            "possible_exit_after": "2024-01-01T00:10:00+00:00",
+            "possible_exit_by": null,
+            "quality_flags": [
+              "input_range_ended",
+              "left_censored",
+              "right_censored"
+            ],
+            "right_censored": true,
+            "rule_version": "visits-v1",
+            "source_digest": "3a79e6419da50415a193203ea1108a273192cc9d39b6e4ca4787bc2b5de95f00",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "19afe7193fc7a31f25144fd33cee8c9b2e98b2d1889678b1766310c19378dd2f",
+              "49c6260a8d5c409a66377c40b9f9c862bd2bafc1909d8491c53a94d093ebc933"
+            ],
+            "status": "reconciled",
+            "visit_id": "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f"
+          }
+        ]
+      },
+      "visit_ids": [
+        "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f",
+        "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+      ]
+    },
+    {
+      "expect": "duplicate_ignored",
+      "update": {
+        "cohort_id": "synthetic-stream:4120",
+        "contract_version": "1.0",
+        "deleted_visit_ids": [],
+        "emitted_at": "2026-11-02T00:00:00+00:00",
+        "mode": "snapshot",
+        "seq": 1,
+        "update_id": "6fcc88f6f3107c0d4f3385e9c8e38e5a430433e8aa1e8ae3c103c9b5eae98d07",
+        "visits": [
+          {
+            "first_inside": "2024-01-01T23:55:00+00:00",
+            "last_inside": "2024-01-02T00:05:00+00:00",
+            "left_censored": false,
+            "maximum_gap_seconds": 600,
+            "mmsi": "990000000",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": "2024-01-01T23:45:00+00:00",
+            "possible_entry_by": "2024-01-01T23:55:00+00:00",
+            "possible_exit_after": "2024-01-02T00:05:00+00:00",
+            "possible_exit_by": "2024-01-02T00:10:00+00:00",
+            "quality_flags": [],
+            "right_censored": false,
+            "rule_version": "visits-v1",
+            "source_digest": "07b7b261b57016d69ce860e7d545edfe279168ecca3c82213ff46e79484c854c",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "32df895fdcf42e0cfe545253948ca58c2d4c6345e3ad938460dcf57be0c55bb0",
+              "21fab5aae4a9191c9648e1817bb23f8118cd12e51171d823b4de164bbda3bae0"
+            ],
+            "status": "reconciled",
+            "visit_id": "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+          },
+          {
+            "first_inside": "2024-01-01T00:00:00+00:00",
+            "last_inside": "2024-01-01T00:10:00+00:00",
+            "left_censored": true,
+            "maximum_gap_seconds": 600,
+            "mmsi": "990000001",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": null,
+            "possible_entry_by": "2024-01-01T00:00:00+00:00",
+            "possible_exit_after": "2024-01-01T00:10:00+00:00",
+            "possible_exit_by": null,
+            "quality_flags": [
+              "input_range_ended",
+              "left_censored",
+              "right_censored"
+            ],
+            "right_censored": true,
+            "rule_version": "visits-v1",
+            "source_digest": "3a79e6419da50415a193203ea1108a273192cc9d39b6e4ca4787bc2b5de95f00",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "19afe7193fc7a31f25144fd33cee8c9b2e98b2d1889678b1766310c19378dd2f",
+              "49c6260a8d5c409a66377c40b9f9c862bd2bafc1909d8491c53a94d093ebc933"
+            ],
+            "status": "reconciled",
+            "visit_id": "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f"
+          }
+        ]
+      },
+      "visit_ids": [
+        "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f",
+        "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+      ]
+    },
+    {
+      "expect": "applied",
+      "update": {
+        "cohort_id": "synthetic-stream:4120",
+        "contract_version": "1.0",
+        "deleted_visit_ids": [],
+        "emitted_at": "2026-11-02T00:05:00+00:00",
+        "mode": "upsert",
+        "seq": 2,
+        "update_id": "82c870cabf9cd28c8bb1f54d885cc1cd73d94e4237d6ac3d6b30a9c1bcb650f1",
+        "visits": [
+          {
+            "first_inside": "2024-01-01T00:00:00+00:00",
+            "last_inside": "2024-01-01T00:10:00+00:00",
+            "left_censored": true,
+            "maximum_gap_seconds": 600,
+            "mmsi": "990000001",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": null,
+            "possible_entry_by": "2024-01-01T00:00:00+00:00",
+            "possible_exit_after": "2024-01-01T00:10:00+00:00",
+            "possible_exit_by": null,
+            "quality_flags": [
+              "input_range_ended",
+              "left_censored",
+              "provisional_revised",
+              "right_censored"
+            ],
+            "right_censored": true,
+            "rule_version": "visits-v1",
+            "source_digest": "3a79e6419da50415a193203ea1108a273192cc9d39b6e4ca4787bc2b5de95f00",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "19afe7193fc7a31f25144fd33cee8c9b2e98b2d1889678b1766310c19378dd2f",
+              "49c6260a8d5c409a66377c40b9f9c862bd2bafc1909d8491c53a94d093ebc933"
+            ],
+            "status": "reconciled",
+            "visit_id": "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f"
+          },
+          {
+            "first_inside": "2024-01-01T00:05:00+00:00",
+            "last_inside": "2024-01-01T00:15:00+00:00",
+            "left_censored": false,
+            "maximum_gap_seconds": 2700,
+            "mmsi": "990000002",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": "2024-01-01T00:00:00+00:00",
+            "possible_entry_by": "2024-01-01T00:05:00+00:00",
+            "possible_exit_after": "2024-01-01T00:15:00+00:00",
+            "possible_exit_by": null,
+            "quality_flags": [
+              "long_gap_unknown_continuity",
+              "right_censored"
+            ],
+            "right_censored": true,
+            "rule_version": "visits-v1",
+            "source_digest": "7701bbc0658238b66ab79154450049bb9a95a8815c3530d27b50a9276a2f60a5",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "569cac98782faf74fae6720de89a688f240c1553243ef46122674d41872c3ed8",
+              "18ecec562737a52e5bbdd257d0a15b683df440206a2140c122df7c8968e13f6e"
+            ],
+            "status": "reconciled",
+            "visit_id": "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97"
+          }
+        ]
+      },
+      "visit_ids": [
+        "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97",
+        "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f",
+        "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+      ]
+    },
+    {
+      "expect": "conflict",
+      "update": {
+        "cohort_id": "synthetic-stream:4120",
+        "contract_version": "1.0",
+        "deleted_visit_ids": [],
+        "emitted_at": "2026-11-02T00:00:00+00:00",
+        "mode": "snapshot",
+        "seq": 1,
+        "update_id": "6fcc88f6f3107c0d4f3385e9c8e38e5a430433e8aa1e8ae3c103c9b5eae98d07",
+        "visits": [
+          {
+            "first_inside": "2024-01-01T00:05:00+00:00",
+            "last_inside": "2024-01-01T00:15:00+00:00",
+            "left_censored": false,
+            "maximum_gap_seconds": 2700,
+            "mmsi": "990000002",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": "2024-01-01T00:00:00+00:00",
+            "possible_entry_by": "2024-01-01T00:05:00+00:00",
+            "possible_exit_after": "2024-01-01T00:15:00+00:00",
+            "possible_exit_by": null,
+            "quality_flags": [
+              "long_gap_unknown_continuity",
+              "right_censored"
+            ],
+            "right_censored": true,
+            "rule_version": "visits-v1",
+            "source_digest": "7701bbc0658238b66ab79154450049bb9a95a8815c3530d27b50a9276a2f60a5",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "569cac98782faf74fae6720de89a688f240c1553243ef46122674d41872c3ed8",
+              "18ecec562737a52e5bbdd257d0a15b683df440206a2140c122df7c8968e13f6e"
+            ],
+            "status": "reconciled",
+            "visit_id": "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97"
+          }
+        ]
+      },
+      "visit_ids": [
+        "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97",
+        "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f",
+        "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+      ]
+    },
+    {
+      "expect": "applied",
+      "update": {
+        "cohort_id": "synthetic-stream:4120",
+        "contract_version": "1.0",
+        "deleted_visit_ids": [
+          "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+        ],
+        "emitted_at": "2026-11-02T00:15:00+00:00",
+        "mode": "delete",
+        "seq": 4,
+        "update_id": "4f56b5f04474709e92de76760c45a385b7c54fe6ead8e283e07e931c9afeee30",
+        "visits": []
+      },
+      "visit_ids": [
+        "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97",
+        "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f"
+      ]
+    },
+    {
+      "expect": "stale",
+      "update": {
+        "cohort_id": "synthetic-stream:4120",
+        "contract_version": "1.0",
+        "deleted_visit_ids": [],
+        "emitted_at": "2026-11-02T00:10:00+00:00",
+        "mode": "upsert",
+        "seq": 3,
+        "update_id": "4537d9ce7bade44b0669e94e1648fc9178a7e6805e83a2e15ed50b1eb9b72e31",
+        "visits": [
+          {
+            "first_inside": "2024-01-01T23:55:00+00:00",
+            "last_inside": "2024-01-02T00:05:00+00:00",
+            "left_censored": false,
+            "maximum_gap_seconds": 600,
+            "mmsi": "990000000",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": "2024-01-01T23:45:00+00:00",
+            "possible_entry_by": "2024-01-01T23:55:00+00:00",
+            "possible_exit_after": "2024-01-02T00:05:00+00:00",
+            "possible_exit_by": "2024-01-02T00:10:00+00:00",
+            "quality_flags": [],
+            "right_censored": false,
+            "rule_version": "visits-v1",
+            "source_digest": "07b7b261b57016d69ce860e7d545edfe279168ecca3c82213ff46e79484c854c",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "32df895fdcf42e0cfe545253948ca58c2d4c6345e3ad938460dcf57be0c55bb0",
+              "21fab5aae4a9191c9648e1817bb23f8118cd12e51171d823b4de164bbda3bae0"
+            ],
+            "status": "reconciled",
+            "visit_id": "b5ec66c9a14c1bfbd6c26b7da958a5ac3cb6ea9b568b28eda3730900523303c7"
+          }
+        ]
+      },
+      "visit_ids": [
+        "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97",
+        "6b8ec44f2e4f497b10f17c46e1e884b969632a710e7c34b7e5caf6a98839a05f"
+      ]
+    },
+    {
+      "expect": "applied",
+      "update": {
+        "cohort_id": "synthetic-stream:4120",
+        "contract_version": "1.0",
+        "deleted_visit_ids": [],
+        "emitted_at": "2026-11-02T00:20:00+00:00",
+        "mode": "snapshot",
+        "seq": 5,
+        "update_id": "b5d3dc9f0a3728394466487bdfdb612a56cc367b3b7e6ad43e571fe1d8cd6211",
+        "visits": [
+          {
+            "first_inside": "2024-01-01T00:05:00+00:00",
+            "last_inside": "2024-01-01T00:15:00+00:00",
+            "left_censored": false,
+            "maximum_gap_seconds": 2700,
+            "mmsi": "990000002",
+            "observation_count": 2,
+            "observed_span_seconds": 600,
+            "port_id": "4120",
+            "possible_entry_after": "2024-01-01T00:00:00+00:00",
+            "possible_entry_by": "2024-01-01T00:05:00+00:00",
+            "possible_exit_after": "2024-01-01T00:15:00+00:00",
+            "possible_exit_by": null,
+            "quality_flags": [
+              "long_gap_unknown_continuity",
+              "right_censored"
+            ],
+            "right_censored": true,
+            "rule_version": "visits-v1",
+            "source_digest": "7701bbc0658238b66ab79154450049bb9a95a8815c3530d27b50a9276a2f60a5",
+            "source_record_count": 2,
+            "source_record_ids": [
+              "569cac98782faf74fae6720de89a688f240c1553243ef46122674d41872c3ed8",
+              "18ecec562737a52e5bbdd257d0a15b683df440206a2140c122df7c8968e13f6e"
+            ],
+            "status": "reconciled",
+            "visit_id": "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97"
+          }
+        ]
+      },
+      "visit_ids": [
+        "2548ebc1f08b783c5bb85fc5cc7aef4d53f84e3ad06995d03acd9acb24398a97"
+      ]
+    }
+  ],
+  "synthetic": true
+}

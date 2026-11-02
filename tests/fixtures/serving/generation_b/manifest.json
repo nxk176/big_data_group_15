@@ -1,0 +1,19 @@
+{
+  "artifact_type": "completed_batch",
+  "complete": true,
+  "contract_version": "1.0",
+  "created_at": "2026-11-02T00:00:00+00:00",
+  "rule_version": "visits-v1",
+  "run_id": "synthetic-fixture-run-b",
+  "source": {
+    "description": "generation_a input plus one late bridging observation"
+  },
+  "status_counts": {
+    "candidate": 1,
+    "reconciled": 10
+  },
+  "synthetic": true,
+  "visit_count": 11,
+  "visits_file": "visits.jsonl",
+  "visits_sha256": "9aca0af86217cdd7df8d348dc582c0c597c9eefcbfb001e78ca27a0bec15a32c"
+}
