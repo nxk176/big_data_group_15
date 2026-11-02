@@ -4,46 +4,21 @@ HarborTrace reconstructs **observed vessel presence in the Los Angeles and Long 
 
 The **26 October checkpoint** includes executable Spark batch reconstruction, a synthetic dataset with expected results, a small real NOAA excerpt, and the [system architecture](docs/week03_architecture.md).
 
-## Team responsibilities and weekly contributions
+<a id="team-responsibilities-and-weekly-contributions"></a>
 
-**Group 15: one independently developed component per member, from week 6 through completion.** Week 5 (`10b881b`) is already published. This allocation was revised after team feedback on 2 November 2026; the weekly targets below are future work, not completed contributions.
+## Team responsibilities
 
-| Owner | Component owned through completion | Deliverable | Can start without |
-|---|---|---|---|
-| Nguyen Xuan Khai — 20235508 | **Processing engine:** Spark batch, stream state, reconstruction, late-data reconciliation, processing correctness and performance | A runnable engine accepting canonical observations and producing versioned visit outputs and run metadata | Vu's live Kafka/HDFS and Huy's MongoDB/dashboard |
-| Do Dang Vu — 20235578 | **Data and infrastructure:** acquisition/quality/spatial assignment, HDFS, Kafka replay, service deployment, infrastructure monitoring and recovery | A reproducible data pipeline and service environment, with normalized files/messages, provenance and health checks | Khai's visit algorithm and Huy's application |
-| Nguyen Quang Huy — 20235505 | **Serving and analytics:** MongoDB, generation publication, dashboard, Spark analytical summaries, MLlib/GraphFrames evaluation and application monitoring | A standalone result-import/serving application with evaluated analytics and a dashboard | Vu's data acquisition and Khai's latest processing implementation |
+Group 15 assigns one major component to each member. Each owner is responsible for implementation, tests, documentation and demonstrating their component. These responsibilities describe project scope, not completed work.
 
-### Work independently, integrate at planned gates
+| Member | Owned component | Responsibilities |
+|---|---|---|
+| Nguyen Xuan Khai — 20235508 | **Processing engine** | Spark batch and streaming, visit reconstruction, late-data reconciliation, correctness checks and processing performance |
+| Do Dang Vu — 20235578 | **Data and infrastructure** | Source acquisition and quality, spatial assignment, HDFS, Kafka replay, deployment, infrastructure monitoring and recovery |
+| Nguyen Quang Huy — 20235505 | **Serving and analytics** | MongoDB result storage and publication, dashboard, Spark analytics, model evaluation and application monitoring |
 
-- **Khai** develops Spark processing with local observation fixtures and writes visit artifacts; live HDFS/Kafka or MongoDB is not needed for engine development.
-- **Vu** develops ingestion, storage, replay and deployment with canonical fixtures, diagnostic consumers and tiny Spark jobs; the final reconstruction algorithm/dashboard is not needed for infrastructure checks.
-- **Huy** develops MongoDB import/publication, analytics and the dashboard with complete synthetic visit/update fixtures matching the published contract; the latest engine does not need to run.
+The components share [versioned data contracts](docs/week03_contracts.md). Each member can develop and test with small labelled fixtures (sample inputs with expected behavior), then connect their component to actual upstream outputs during integration. Synthetic examples verify behavior; real-data conclusions require real-data evaluation.
 
-At the start of week 6, agree serialization, fields, versions and sample expectations using the [published contracts](docs/week03_contracts.md). Each owner validates their own side and keeps a standalone run command. Synthetic fixtures support development, not claims about real-data model quality. The [detailed plan](docs/team_plan.md) defines file ownership, adapters, data handoff and acceptance checks.
-
-Integrate **at the end of week 9** for the first real local pipeline, **week 12** for the deployed system and evaluated analytics, and **week 14** for final reproduction. Each owner fixes defects in their component. Earlier component reviews/merges do not wait for these gates; a failed gate remains an explicit integration gap.
-
-### Weekly commits inside each component
-
-**Each member commits and pushes their own component branch when ready. There is no rotating weekly release gate.** Review and merge passing component changes independently, preserving authorship. The lecturer requires at least one commit from each member; the team targets a meaningful contribution from all three each week. Track work, checks, reviews and actual effort in the [contribution ledger](docs/team_contributions.md), rather than judging fairness by commit counts alone.
-
-MLlib is Spark's machine-learning library; GraphFrames provides graph analysis for Spark. A generation is a versioned set of results that readers access consistently.
-
-| Week | Khai — processing engine | Vu — data and infrastructure | Huy — serving and analytics |
-|---|---|---|---|
-| 6 | Local fixture → batch visits + manifest; assert expected rows and immutable output | Source preparation and canonical fixtures; HDFS upload/readback with count/hash checks | Full synthetic visit/update fixtures; isolated Mongo import/query with schema checks |
-| 7 | File-fed streaming state; normal/gap/censored cases and bounded-state checks | Seeded Kafka replay + diagnostic consumer; sent/retained counts and duplicates | Dashboard port/date filters, uncertainty/provenance; empty-state and query checks |
-| 8 | Event-time watermark, append/update modes, late-event and restart tests | Multi-day manifests; data-coverage audit and bounded acquisition/preparation for analytics | Generation activation, provisional update replacement, retries and stale-update tests |
-| 9 | Batch reconciliation of late bridge/split cases; expose real output at first integration gate | Supply real canonical files/replay; verify source-to-engine counts at first integration gate | Import actual engine output; reconcile dashboard counts; introduce aggregate/time-series pipeline |
-| 10 | HDFS/Kafka adapters and remote Spark execution; compare with fixture/local results | Execute agreed cloud deployment; capture workers, block placement and service access evidence | Versioned remote connections; statistics/windows/pivot/unpivot/custom aggregate/UDF and join checks |
-| 11 | Spark query-plan experiments: broadcast/sort-merge/multiple joins, partitions and persistence | Validate real analytics input coverage and boundary quality; measure service resource use | MLlib evaluation with appropriate real inputs; GraphFrames and time-series interpretation |
-| 12 | Pruning/bucketing/cache benchmarks, equality checks and deployed processing evidence | Fixed-input one/two-worker and vertical-resource comparison; tested infrastructure alerts | Analytics/dashboard query measurements, application alerts and deployed read consistency |
-| 13 | Replay/late/restart invariants and engine failure evidence | Replica-loss and isolated restore tests; security, backups and resource/cost record | Publisher crash/fencing/sink retry tests, access checks and application recovery |
-| 14 | Processing/correctness report and final component reproduction | Data/storage/deployment report and clean-environment reproduction | Serving/analytics report, evaluated results and presentation assembly |
-| 15 | Resolve engine findings, final evidence and individual defense | Resolve infrastructure findings, final evidence and individual defense | Resolve application findings, final evidence and individual defense |
-
-All three own code, tests, documentation and an individual demonstration. Start with 6–8 hours per person per week, review actual workload every two weeks, and rebalance concrete subtasks when needed. The full plan retains the course requirements, report/lesson allocation and actual deployment/analytics evidence gates. Existing local prototype modules require reviewed handoff and attribution; they are not automatically present in a clean GitHub clone.
+Members author their own changes and review one another's work. Integration defects are resolved by the owner of the affected component. Commit descriptions and test evidence identify the actual change, including adaptations of existing prototype code. Published milestones below document what can currently be run and the limits of its verification.
 
 ## Run week 5: ingestion and spatial preparation
 

@@ -10,3 +10,6 @@ reports/generated/
 *.egg-info/
 # Private local reading notes
 /docs/week04_demo_guide_vi.md
+# Local team planning (earlier revisions remain in Git history)
+/docs/team_plan.md
+/docs/team_contributions.md
