@@ -6,46 +6,44 @@ The **26 October checkpoint** includes executable Spark batch reconstruction, a 
 
 ## Team responsibilities and weekly contributions
 
-**Group 15. Week 5 is already published (`10b881b`); the following work starts in week 6.** These are planned responsibilities, not claims that future work has been completed. Week 5 delivers validated ingestion and geographic port assignment; the next step adds persistent batch output and storage integration.
+**Group 15: one independently developed component per member, from week 6 through completion.** Week 5 (`10b881b`) is already published. This allocation was revised after team feedback on 2 November 2026; the weekly targets below are future work, not completed contributions.
 
-| Member | Primary engineering responsibility | Cross-cutting responsibility |
-|---|---|---|
-| Nguyen Xuan Khai — 20235508 | Reconstruction rules, Spark batch/stream state, reconciliation correctness | Correctness experiments and integration contracts |
-| Do Dang Vu — 20235578 | Source quality, HDFS, Kafka replay, native/cloud infrastructure | Deployment, resource measurements, recovery |
-| Nguyen Quang Huy — 20235505 | MongoDB serving, dashboard, Spark analytics | Analytics evaluation, monitoring, user-visible evidence |
+| Owner | Component owned through completion | Deliverable | Can start without |
+|---|---|---|---|
+| Nguyen Xuan Khai — 20235508 | **Processing engine:** Spark batch, stream state, reconstruction, late-data reconciliation, processing correctness and performance | A runnable engine accepting canonical observations and producing versioned visit outputs and run metadata | Vu's live Kafka/HDFS and Huy's MongoDB/dashboard |
+| Do Dang Vu — 20235578 | **Data and infrastructure:** acquisition/quality/spatial assignment, HDFS, Kafka replay, service deployment, infrastructure monitoring and recovery | A reproducible data pipeline and service environment, with normalized files/messages, provenance and health checks | Khai's visit algorithm and Huy's application |
+| Nguyen Quang Huy — 20235505 | **Serving and analytics:** MongoDB, generation publication, dashboard, Spark analytical summaries, MLlib/GraphFrames evaluation and application monitoring | A standalone result-import/serving application with evaluated analytics and a dashboard | Vu's data acquisition and Khai's latest processing implementation |
 
-All three members own implementation, meaningful checks, documentation, peer review and a demonstration of their work. Plan for approximately 6–8 hours per member per week and rebalance using actual effort and task difficulty.
+### Work independently, integrate at planned gates
 
-### Who commits and who releases each week?
+- **Khai** develops Spark processing with local observation fixtures and writes visit artifacts; live HDFS/Kafka or MongoDB is not needed for engine development.
+- **Vu** develops ingestion, storage, replay and deployment with canonical fixtures, diagnostic consumers and tiny Spark jobs; the final reconstruction algorithm/dashboard is not needed for infrastructure checks.
+- **Huy** develops MongoDB import/publication, analytics and the dashboard with complete synthetic visit/update fixtures matching the published contract; the latest engine does not need to run.
 
-**Each member authors commits for their own substantive work.** The release lead integrates reviewed changes, checks the combined demonstration and pushes the weekly release while preserving each contributor's authorship.
+At the start of week 6, agree serialization, fields, versions and sample expectations using the [published contracts](docs/week03_contracts.md). Each owner validates their own side and keeps a standalone run command. Synthetic fixtures support development, not claims about real-data model quality. The [detailed plan](docs/team_plan.md) defines file ownership, adapters, data handoff and acceptance checks.
 
-- **Do Dang Vu:** release lead for weeks **6, 8, 10, 12 and 14**.
-- **Nguyen Quang Huy:** release lead for weeks **7, 9, 11, 13 and 15**.
-- **Nguyen Xuan Khai:** contributes and commits the Khai work package every week, alongside Vu and Huy.
+Integrate **at the end of week 9** for the first real local pipeline, **week 12** for the deployed system and evaluated analytics, and **week 14** for final reproduction. Each owner fixes defects in their component. Earlier component reviews/merges do not wait for these gates; a failed gate remains an explicit integration gap.
 
-The lecturer requires at least one commit from every member. The team targets a substantive contribution from each person every week starting in week 6, and should meet the lecturer's minimum during that first shared cycle. The person pushing a release is not necessarily the author of its commits. Evaluate contribution through completed work, tests, review and explanations, rather than commit counts alone.
+### Weekly commits inside each component
 
-### Weeks 6–15: individual deliverables
+**Each member commits and pushes their own component branch when ready. There is no rotating weekly release gate.** Review and merge passing component changes independently, preserving authorship. The lecturer requires at least one commit from each member; the team targets a meaningful contribution from all three each week. Track work, checks, reviews and actual effort in the [contribution ledger](docs/team_contributions.md), rather than judging fairness by commit counts alone.
 
-MLlib is Spark's machine-learning library; GraphFrames provides graph analysis for Spark. A generation is a versioned set of results that readers can access consistently.
+MLlib is Spark's machine-learning library; GraphFrames provides graph analysis for Spark. A generation is a versioned set of results that readers access consistently.
 
-| Week | Khai | Vu | Huy | Release lead | Visible result |
-|---|---|---|---|---|---|
-| 6 | File-based batch entry point and repeatable visit output | HDFS ingestion/readback and input accounting | MongoDB generation schema and isolated read/write example | Vu | Prepared input → batch output; independently runnable storage examples |
-| 7 | Batch publication interface and generation consistency tests | Seeded Kafka historical replay and retained-message accounting | MongoDB-backed dashboard with port/date filters | Huy | First reproducible local batch → database → dashboard path; Kafka producer ready |
-| 8 | Structured Streaming state, watermark and late-event fixture | Kafka → Spark connectivity, retained input and restart scenario | Provisional output adapter and dashboard status separation | Vu | Historical replay → streaming → provisional display |
-| 9 | Late-data batch reconciliation and publication failure checks | Multi-day inputs and bounded scale run; review quality cases | Statistics, time series, aggregate transformations and join experiments | Huy | Replay corrected by batch; real-data summaries and measured query plans |
-| 10 | Spark cluster execution and one/two-worker result equality | Execute approved cloud deployment, HDFS placement and access checks | Remote MongoDB/dashboard connection and end-to-end health evidence | Vu | Actual deployed pipeline, with task and data placement evidence |
-| 11 | MLlib evaluation design and robustness checks | Expanded real-data coverage and data-quality review | Run Spark MLlib and GraphFrames; explain results and limitations | Huy | Evaluated analytics on adequate real data |
-| 12 | Multiple-join, partition-count and persistence experiments | Pruning/bucketing, compression and horizontal/vertical measurements | Dashboard query/index optimization and monitoring alerts | Vu | Correctness-preserving performance comparisons and an observable system |
-| 13 | Stream/sink retry and publication crash recovery | Replica-loss and isolated backup/restore exercise | Monitoring, integration resilience and access-control checks | Huy | Reproducible failure/recovery evidence with honest guarantee boundaries |
-| 14 | Problem/method/correctness report and requirement audit | Data/storage/deployment report and clean-environment rehearsal | Analytics/visualization report and final presentation | Vu | Complete report, evidence index, and reproducible release candidate |
-| 15 | Fix reconstruction/integration defects and rehearse defense | Fix deployment/recovery defects and rehearse defense | Fix analytics/dashboard defects and rehearse defense | Huy | Final tested release and three individual demonstrations |
+| Week | Khai — processing engine | Vu — data and infrastructure | Huy — serving and analytics |
+|---|---|---|---|
+| 6 | Local fixture → batch visits + manifest; assert expected rows and immutable output | Source preparation and canonical fixtures; HDFS upload/readback with count/hash checks | Full synthetic visit/update fixtures; isolated Mongo import/query with schema checks |
+| 7 | File-fed streaming state; normal/gap/censored cases and bounded-state checks | Seeded Kafka replay + diagnostic consumer; sent/retained counts and duplicates | Dashboard port/date filters, uncertainty/provenance; empty-state and query checks |
+| 8 | Event-time watermark, append/update modes, late-event and restart tests | Multi-day manifests; data-coverage audit and bounded acquisition/preparation for analytics | Generation activation, provisional update replacement, retries and stale-update tests |
+| 9 | Batch reconciliation of late bridge/split cases; expose real output at first integration gate | Supply real canonical files/replay; verify source-to-engine counts at first integration gate | Import actual engine output; reconcile dashboard counts; introduce aggregate/time-series pipeline |
+| 10 | HDFS/Kafka adapters and remote Spark execution; compare with fixture/local results | Execute agreed cloud deployment; capture workers, block placement and service access evidence | Versioned remote connections; statistics/windows/pivot/unpivot/custom aggregate/UDF and join checks |
+| 11 | Spark query-plan experiments: broadcast/sort-merge/multiple joins, partitions and persistence | Validate real analytics input coverage and boundary quality; measure service resource use | MLlib evaluation with appropriate real inputs; GraphFrames and time-series interpretation |
+| 12 | Pruning/bucketing/cache benchmarks, equality checks and deployed processing evidence | Fixed-input one/two-worker and vertical-resource comparison; tested infrastructure alerts | Analytics/dashboard query measurements, application alerts and deployed read consistency |
+| 13 | Replay/late/restart invariants and engine failure evidence | Replica-loss and isolated restore tests; security, backups and resource/cost record | Publisher crash/fencing/sink retry tests, access checks and application recovery |
+| 14 | Processing/correctness report and final component reproduction | Data/storage/deployment report and clean-environment reproduction | Serving/analytics report, evaluated results and presentation assembly |
+| 15 | Resolve engine findings, final evidence and individual defense | Resolve infrastructure findings, final evidence and individual defense | Resolve application findings, final evidence and individual defense |
 
-**Start with week 6:** Khai implements reproducible file-based Spark batch output; Vu verifies canonical-data upload/readback through HDFS; Huy prepares MongoDB generation storage and isolated read/write checks. These are independently testable foundations. Week 7 connects batch output, the database and dashboard into the first reproducible local serving path.
-
-The [full delivery plan](docs/team_plan.md) contains per-person commit suggestions, file scope, dependencies, acceptance checks and report assignments. Record actual commit links, results and review in the [contribution ledger](docs/team_contributions.md). Use separate branches/clones and individual Git identities; preserve authorship when merging. Existing local prototype code must be reviewed, attributed and made reproducible before it becomes a shared deliverable.
+All three own code, tests, documentation and an individual demonstration. Start with 6–8 hours per person per week, review actual workload every two weeks, and rebalance concrete subtasks when needed. The full plan retains the course requirements, report/lesson allocation and actual deployment/analytics evidence gates. Existing local prototype modules require reviewed handoff and attribution; they are not automatically present in a clean GitHub clone.
 
 ## Run week 5: ingestion and spatial preparation
 
