@@ -92,6 +92,7 @@ Spark repartitions by MMSI (Maritime Mobile Service Identity, a maritime radio i
 - [Checkpoint and data provenance](docs/week04_checkpoint.md): source providers, checksums, row accounting, local pilot measurements, and the demonstration sequence.
 - [Synthetic scenarios](tests/fixtures/reference_cases.json): normal entry/exit, crossing midnight, a long gap, censored input, and a short excursion.
 - [Real NOAA excerpt](tests/fixtures/real_ais_excerpt.jsonl): two canonical (normalized) observations producing one visit with an observed span of 1,080 seconds and both ends censored.
+- [Data and infrastructure guide](docs/data_infrastructure.md): canonical/replay boundary fixtures, portable native HDFS scripts and verified HDFS readback.
 - [Lambda architecture](docs/week03_architecture.md), [data contracts](docs/week03_contracts.md), and [visit decision table](docs/visit_decision_table.md): component roles and reconstruction rules.
 
 The full January 1 NOAA pilot is stored locally: 7,293,408 source rows and 235,713 regional canonical observations. Those large files are excluded from Git; their provenance and checksums are documented. Port boundaries come from the USACE **Ports layer, ID 0**, within the Port and Port Statistical Area service. Observed area presence does not establish berth occupancy or a verified commercial port call.

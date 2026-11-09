@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_root="/mnt/e/big_data"
-runtime_dir="${HARBORTRACE_RUNTIME_DIR:-$HOME/.local/harbortrace}"
-export HADOOP_HOME="$runtime_dir/hadoop-3.5.0"
-export HADOOP_CONF_DIR="$project_root/deploy/native"
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 hdfs="$HADOOP_HOME/bin/hdfs"
 fixture="$project_root/tests/fixtures/hdfs_week02.txt"
-destination="hdfs://127.0.0.1:9000/harbortrace/week02/hdfs_week02.txt"
-folder="hdfs://127.0.0.1:9000/harbortrace/week02"
+destination="$HDFS_URI/harbortrace/week02/hdfs_week02.txt"
+folder="$HDFS_URI/harbortrace/week02"
 test -x "$hdfs"
 test -f "$fixture"
 
@@ -44,8 +40,8 @@ if ! "$hdfs" dfs -test -e "$destination"; then
   "$hdfs" dfs -mv "$temporary" "$destination"
 fi
 
-local_sha="$(sha256sum "$fixture" | cut -d ' ' -f 1)"
-remote_sha="$("$hdfs" dfs -cat "$destination" | sha256sum | cut -d ' ' -f 1)"
+local_sha="$(sha_of 256 <"$fixture")"
+remote_sha="$("$hdfs" dfs -cat "$destination" | sha_of 256)"
 remote_bytes="$("$hdfs" dfs -stat '%b' "$destination")"
 if [[ "$local_sha" != "$remote_sha" || "$remote_bytes" -ne "$(wc -c <"$fixture")" ]]; then
   echo "HDFS round-trip checksum or byte count differs from the fixture" >&2

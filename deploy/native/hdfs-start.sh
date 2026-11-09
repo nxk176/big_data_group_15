@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_root="/mnt/e/big_data"
-data_dir="$project_root/data"
-runtime_dir="${HARBORTRACE_RUNTIME_DIR:-$HOME/.local/harbortrace}"
-export HADOOP_HOME="$runtime_dir/hadoop-3.5.0"
-export HADOOP_CONF_DIR="$project_root/deploy/native"
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+data_dir="$HARBORTRACE_DATA_DIR"
 export HADOOP_HEAPSIZE_MAX=512m
 pid_dir="$data_dir/run"
 log_dir="$data_dir/logs/native"
