@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Installs only the Hadoop runtime. Project data always stays in E:\big_data.
-runtime_dir="${HARBORTRACE_RUNTIME_DIR:-$HOME/.local/harbortrace}"
+# Installs only the Hadoop runtime. Project data stays under HARBORTRACE_DATA_DIR.
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 archive="$runtime_dir/downloads/hadoop-3.5.0.tar.gz"
 target="$runtime_dir/hadoop-3.5.0"
 url="https://archive.apache.org/dist/hadoop/common/hadoop-3.5.0/hadoop-3.5.0.tar.gz"
@@ -12,7 +12,10 @@ mkdir -p "$runtime_dir/downloads"
 if [[ ! -f "$archive" ]]; then
   curl --fail --location --retry 5 --retry-delay 2 --continue-at - --output "$archive" "$url"
 fi
-printf '%s  %s\n' "$sha512" "$archive" | sha512sum --check --status
+if [[ "$(sha_of 512 <"$archive")" != "$sha512" ]]; then
+  echo "Hadoop archive checksum differs from the pinned SHA-512: $archive" >&2
+  exit 1
+fi
 if [[ -f "$target/.harbortrace-complete" && -x "$target/bin/hdfs" ]]; then
   printf 'Verified Hadoop 3.5.0 runtime: %s\n' "$target"
   exit 0

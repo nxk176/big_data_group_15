@@ -1,0 +1,55 @@
+{
+  "canonical": {
+    "format": "JSONL, one canonical observation per line, sorted keys",
+    "order": [
+      "mmsi",
+      "event_time"
+    ],
+    "path": "week06_canonical.jsonl",
+    "row_accounting": {
+      "accounted_rows": 14,
+      "canonical_rows": 7,
+      "conflict_rows": 2,
+      "duplicate_rows": 1,
+      "invalid": 3,
+      "outside_region": 1,
+      "region_rows": 10,
+      "source_rows": 14
+    },
+    "rows": 7,
+    "sha256": "d8ec070559bf2431c7a5db3657514e56a39b494efaa9ff9a23d8c51d653be27a"
+  },
+  "contract_version": "1.0",
+  "description": "Canonical observations and replay messages prepared from the synthetic week-five source; they establish contract behavior, not real-world accuracy.",
+  "generated_by": "PYTHONPATH=src python scripts/data_storage.py fixtures",
+  "kind": "synthetic",
+  "origin": {
+    "fixture": "tests/fixtures/week05_ingestion.json",
+    "sha256": "0b8b6bb51e1bf9f6a50816a8f437f2e7e2ed127ff8be5122bc19b7639e5add4b"
+  },
+  "replay": {
+    "accounting": {
+      "distinct_logical_observations": 7,
+      "distinct_replay_ids": 8,
+      "distinct_source_records": 7,
+      "messages": 8,
+      "repeated_replay_ids": 0,
+      "replay_copies": 1,
+      "run_ids": [
+        "fixture-replay-week06"
+      ],
+      "vessels": 2
+    },
+    "duplicate_copies": 1,
+    "key": "mmsi",
+    "order": [
+      "event_time",
+      "mmsi"
+    ],
+    "path": "week06_replay.jsonl",
+    "replay_run_id": "fixture-replay-week06",
+    "seed": 20261102,
+    "sha256": "25710cbc7cd5e7efaf70382133b5650965875bbbeef9ea024c0c26d50b1046d3",
+    "started_at": "2024-01-02T00:00:00+00:00"
+  }
+}
