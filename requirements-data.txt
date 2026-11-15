@@ -1,0 +1,6 @@
+# Data and infrastructure component (preparation, HDFS readback, Kafka replay publisher and diagnostic consumer).
+-r requirements-week05.txt
+# Replay tallies keep 8-byte identity fingerprints in numpy arrays.
+numpy==2.1.3
+# librdkafka client: idempotent producer with the Java-compatible murmur2 partitioner.
+confluent-kafka==2.6.1
