@@ -77,6 +77,8 @@ PYTHONPATH=src python scripts/analytics_run.py --synthetic
 
 The [serving and analytics guide](docs/serving_analytics_guide.md) covers the boundary formats, MongoDB commands, observed results and the evidence still required. Real-data and deployment evidence is still outstanding.
 
+The [week-6 serving evidence](docs/week06_serving.md) records 12 passing integration tests against a real local MongoDB server with synthetic inputs.
+
 ## Data and design references
 
 - [Proposal](docs/week01_proposal.md) and [Hadoop/HDFS note](docs/week02_hadoop.md).

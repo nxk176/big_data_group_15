@@ -126,6 +126,10 @@ GraphFrames is optional. When its package can be downloaded, add `--packages gra
 
 ## Observed results so far (2 November 2026, synthetic input)
 
+The [week-6 evidence](week06_serving.md) records the real MongoDB execution on 15 November 2026.
+Its 12 integration tests cover complete import, queries, schema rejection, and the provisional update sequence.
+The older results below remain the original synthetic development record.
+
 | Check | Command | Observed |
 |---|---|---|
 | Unit and component tests | `python -m pytest -q` in a fresh venv from `requirements-serving.txt` | 72 passed, 1 skipped (the real-MongoDB test without a server) |
@@ -161,7 +165,8 @@ The custom aggregates run inside the JVM. An earlier pandas grouped-aggregate UD
 
 | Plan item | Status |
 |---|---|
-| Week 6–8: fixtures, isolated import/query, dashboard filters/uncertainty, generation activation, update replacement, retries and stale checks | Implemented and tested on synthetic fixtures with `mongomock`. **Not yet run against a real MongoDB server here**: the sandbox could not install one. Run `tests/integration` on the team machine. |
+| Week 6: complete fixtures and isolated MongoDB import/query with schema validation | Executed on MongoDB 8.0.17 with synthetic inputs on 15 November 2026. All 12 integration tests passed. See the [week-6 evidence](week06_serving.md). |
+| Week 7–8: dashboard filters/uncertainty, activation, replacement, retries, and stale updates | Component tests use `mongomock`. The real-server suite also exercises publication, interrupted imports, retries, and all seven provisional fixture steps. Deployed dashboard evidence remains separate. |
 | Week 9 gate: import actual engine output and reconcile dashboard counts | The path works with the published week-5 output. The gate needs Khai's real-data artifacts and a joint count reconciliation. |
 | Week 10: versioned remote connections | The URI, database and token are parameters. A deployed MongoDB and dashboard depend on Vu's environment. |
 | Week 11: MLlib with real inputs, GraphFrames, time-series interpretation | The code and the gate are ready. Real evaluation is blocked until the coverage audit supplies qualifying data. GraphFrames needs the package on the team machine. |
