@@ -124,6 +124,9 @@ def prepare_spark(spark, sources: list[Path], boundaries: Path, output: str, *, 
         raise PrepareError("Give at least one source file, without repeated file names")
     selected, rejected = select_ports(boundaries, ports)
     bounds = region_bounds(selected, region_margin_degrees)
+    if replication:
+        # Spark's Hadoop client defaults to 3 replicas whatever the cluster's own setting is.
+        spark.sparkContext._jsc.hadoopConfiguration().set("dfs.replication", str(replication))
     filesystem, final = _filesystem(spark, output)
     if filesystem.exists(final):
         raise PrepareError(f"Output already exists and is immutable: {output}")
@@ -132,8 +135,6 @@ def prepare_spark(spark, sources: list[Path], boundaries: Path, output: str, *, 
     _, partial_path = _filesystem(spark, partial)
     if filesystem.exists(partial_path):
         filesystem.delete(partial_path, True)  # a previous attempt crashed before publishing
-    if replication:
-        spark.sparkContext._jsc.hadoopConfiguration().set("dfs.replication", str(replication))
 
     raw = spark.read.parquet(*[str(source) for source in sources])
     absent = [name for name in ("mmsi", "base_date_time", "geometry") if name not in raw.columns]
@@ -205,6 +206,11 @@ def prepare_spark(spark, sources: list[Path], boundaries: Path, output: str, *, 
                 "seconds": round(time.perf_counter() - started, 3),
                 "prepared_at_utc": datetime.now(timezone.utc).isoformat(), "output": output}
     _write_text(spark, f"{partial}/_manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    if replication:
+        # A FileSystem cached before the setting above keeps creating files with its old factor.
+        files = filesystem.listFiles(partial_path, True)
+        while files.hasNext():
+            filesystem.setReplication(files.next().getPath(), replication)
     if not filesystem.rename(partial_path, final):
         raise PrepareError(f"Could not publish {partial} as {output}")
     return manifest

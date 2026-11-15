@@ -78,6 +78,14 @@ class Hdfs:
             raise HdfsError(f"hdfs dfs {' '.join(args)} failed ({result.returncode}): {result.stderr.strip()[-500:]}")
         return result
 
+    def configured(self, key: str) -> str:
+        """A value from the cluster configuration (HADOOP_CONF_DIR), e.g. dfs.replication."""
+        result = subprocess.run([str(self.binary), "getconf", "-confKey", key], capture_output=True, text=True,
+                                env=self._environment(), check=False)
+        if result.returncode != 0:
+            raise HdfsError(f"hdfs getconf {key} failed: {result.stderr.strip()[-500:]}")
+        return result.stdout.strip()
+
     def exists(self, path: str) -> bool:
         return self.dfs("-test", "-e", self.url(path), check=False).returncode == 0
 
