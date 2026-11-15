@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from harbortrace.hdfs import Hdfs, HdfsError, publish_file
+from harbortrace.hdfs import Hdfs, HdfsError, parse_fsck, publish_file
 
 
 @pytest.fixture(scope="module")
@@ -52,3 +52,22 @@ def test_missing_java_is_an_hdfs_error_not_a_failed_command(monkeypatch):
     monkeypatch.setattr(Path, "is_file", lambda self: True)  # pretend Hadoop is installed
     with pytest.raises(HdfsError, match="No Java runtime"):
         Hdfs.from_environment()
+
+
+def test_fsck_report_is_parsed():
+    text = """FSCK started by user for path /x
+/x/a.parquet 300 bytes, replicated: replication=2, 2 block(s):  OK
+0. BP-1:blk_1 len=200 Live_repl=2  [DatanodeInfoWithStorage[127.0.0.1:9866,DS-a,DISK], DatanodeInfoWithStorage[127.0.0.1:9876,DS-b,DISK]]
+1. BP-1:blk_2 len=100 Live_repl=1  [DatanodeInfoWithStorage[127.0.0.1:9876,DS-b,DISK]]
+
+Status: HEALTHY
+ Number of data-nodes:	2
+ Total files:	1
+ Under-replicated blocks:	1 (50.0 %)
+ Missing blocks:		0
+ Corrupt blocks:		0
+"""
+    assert parse_fsck(text) == {
+        "status": "HEALTHY", "files": 1, "blocks": 2, "datanodes": 2, "live_replicas": {"1": 1, "2": 1},
+        "replicas_per_datanode": {"127.0.0.1:9866": 1, "127.0.0.1:9876": 2},
+        "under_replicated": 1, "missing_blocks": 0, "corrupt_blocks": 0}
