@@ -33,7 +33,7 @@ git clone https://github.com/nxk176/big_data_group_15.git
 cd big_data_group_15
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements-engine.txt -r requirements-serving.txt
+python -m pip install -r requirements-engine.txt -r requirements-serving.txt -r requirements-data.txt
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64   # path of your Java 17
 python -m pytest -q
 ```
@@ -48,9 +48,10 @@ Validates position records, assigns ports from the USACE boundaries, quarantines
 PYTHONPATH=src python scripts/week05_ingestion.py                # synthetic source -> canonical Parquet, rejected-row audit
 PYTHONPATH=src python scripts/data_storage.py fixtures --check   # boundary fixtures still match a fresh preparation
 PYTHONPATH=src python scripts/data_storage.py hdfs-readback      # needs a running HDFS (deploy/native/hdfs-*.sh)
+PYTHONPATH=src python scripts/data_storage.py kafka-publish      # needs a running Kafka (deploy/native/kafka-*.sh)
 ```
 
-The synthetic source accounts for 14 rows: 7 canonical, 3 invalid, 1 duplicate, 2 conflicting and 1 outside the region. Guides: [data and infrastructure](docs/data_infrastructure.md) (fixtures, portable HDFS scripts, readback results, limits) and [ingestion and spatial preparation](docs/week05_ingestion.md) (processing path, real pilot of 7,293,408 source rows, acquisition command).
+The synthetic source accounts for 14 rows: 7 canonical, 3 invalid, 1 duplicate, 2 conflicting and 1 outside the region. On the real 1 January replay, all 236,213 messages published to Kafka were read back with identical accounting, also after a broker restart, and the streaming engine produced the same 370 visit identifiers from that topic as batch. Guides: [data and infrastructure](docs/data_infrastructure.md) (fixtures, portable HDFS and Kafka scripts, readback and replay results, limits) and [ingestion and spatial preparation](docs/week05_ingestion.md) (processing path, real pilot of 7,293,408 source rows, acquisition command).
 
 ## Processing engine — Nguyen Xuan Khai
 
