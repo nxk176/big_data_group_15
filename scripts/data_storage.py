@@ -1,7 +1,10 @@
-"""Data and storage component: canonical/replay fixtures and verified HDFS readback.
+"""Data and storage component: fixtures, verified HDFS readback and Kafka replay.
 
   fixtures       regenerate (or --check) the committed canonical and replay fixtures
   hdfs-readback  publish canonical Parquet + manifest to HDFS and verify bytes, hash and rows
+  replay-files   turn prepared canonical Parquet into event-time-windowed replay JSONL files
+  kafka-publish  send replay JSONL to a Kafka topic, then read it back with the diagnostic consumer
+  kafka-verify   re-run the diagnostic consumer against an earlier publish report
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ import pyarrow.parquet as pq
 from harbortrace.contracts import CONTRACT_VERSION, Observation
 from harbortrace.hdfs import Hdfs, publish_file
 from harbortrace.ingest import atomic_json, prepare, sha256_file
+from harbortrace.kafka_replay import ensure_topic, kafka_clients, publish, replay_files, retained_messages, verify
 from harbortrace.replay import account, replay_messages
 from harbortrace.spark_core import spark_session
 from week04_checkpoint import print_table
@@ -141,6 +145,97 @@ def command_hdfs_readback(args) -> None:
     print("RESULT: PASS - bytes, SHA-256 and Spark row counts agree between local and HDFS copies.")
 
 
+def command_replay_files(args) -> None:
+    canonical = args.canonical.resolve()
+    manifest = json.loads(canonical.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+    if manifest["sha256"] != sha256_file(canonical):
+        raise SystemExit("FAIL: canonical Parquet differs from its preparation manifest")
+    output = (args.output or ROOT / "data/replay" / args.run_id).resolve()
+    if output.exists():
+        raise SystemExit(f"FAIL: {output} exists; replay files are immutable, choose a new --output or --run-id")
+    # Holds one prepared file in memory (about 240,000 messages for the two-port day).
+    rows = pq.read_table(canonical).to_pylist()
+    messages = replay_messages(rows, args.run_id, args.started_at, seed=args.seed, duplicate_copies=args.duplicates)
+    windows: dict[str, list[dict]] = {}
+    for message in messages:
+        event = datetime.fromisoformat(message["event_time"])
+        start = event.replace(minute=event.minute - event.minute % args.window_minutes, second=0, microsecond=0)
+        windows.setdefault(start.strftime("%Y%m%dT%H%M"), []).append(message)
+    working = output.with_name(output.name + ".tmp")
+    working.mkdir(parents=True)
+    files = []
+    for name, rows in sorted(windows.items()):
+        path = working / f"replay-{name}.jsonl"
+        path.write_text(jsonl(rows), encoding="utf-8")
+        files.append({"path": path.name, "messages": len(rows), "sha256": sha256_file(path)})
+    summary = {"contract_version": CONTRACT_VERSION, "canonical": str(canonical), "canonical_sha256": manifest["sha256"],
+               "canonical_rows": manifest["row_accounting"]["canonical_rows"], "replay_run_id": args.run_id,
+               "started_at": args.started_at, "seed": args.seed, "duplicate_copies": args.duplicates,
+               "window_minutes": args.window_minutes, "files": files, "accounting": account(messages)}
+    atomic_json(working / "replay-manifest.json", summary)
+    working.rename(output)
+    print_table("REPLAY FILES", ["Item", "Value"],
+                [["Canonical rows", summary["canonical_rows"]], ["Messages", len(messages)],
+                 ["Seeded retry copies", args.duplicates], ["Files", len(files)], ["Output", output]])
+
+
+def print_kafka(publication: dict, check: dict) -> None:
+    print_table("KAFKA PUBLISH", ["Partition", "First offset", "Last offset", "Messages"],
+                [[p, span["first"], span["last"], span["messages"]] for p, span in publication["offsets"].items()])
+    sent, received = publication["tally"], check["received"]
+    print_table("SENT VERSUS RECEIVED", ["Measure", "Sent", "Received"],
+                [[key, sent[key], received[key]] for key in
+                 ("messages", "distinct_replay_ids", "distinct_source_records", "replay_copies",
+                  "distinct_logical_observations", "vessels")]
+                + [["delivery failures", publication["failed"], "-"],
+                   ["foreign / invalid / wrong key", "-", f"{check['counts']['foreign']} / {check['counts']['invalid']} / "
+                                                          f"{check['counts']['wrong_key']}"],
+                   ["key on two partitions / out of order", "-", f"{check['counts']['key_moved']} / "
+                                                                f"{check['counts']['out_of_order']}"],
+                   ["replay-ID digest", publication["replay_id_digest"][:16], check["replay_id_digest"][:16]]])
+    for problem in check["problems"]:
+        print(f"PROBLEM: {problem}")
+    print(f"RESULT: {check['result']}")
+
+
+def command_kafka_publish(args) -> None:
+    files = replay_files(args.input or [REPLAY])
+    run = new_run("kafka")
+    producer, admin, consumer = kafka_clients(args.bootstrap)
+    try:
+        topic = ensure_topic(admin, args.topic, args.partitions)
+        existing = retained_messages(consumer, args.topic, args.partitions)
+        if existing and not args.append:
+            raise SystemExit(f"FAIL: topic {args.topic} already holds {existing} messages; use a new topic or --append")
+        publication = {**publish(files, args.topic, producer, progress_every=args.progress_every),
+                       "bootstrap": args.bootstrap, "topic_setup": topic, "messages_before": existing}
+        atomic_json(run / "publish.json", publication)
+        check = verify(publication, consumer, timeout=args.timeout)
+    finally:
+        consumer.close()
+    atomic_json(run / "verify.json", check)
+    print(f"\nHARBORTRACE - KAFKA REPLAY ({len(files)} files -> {args.topic} at {args.bootstrap})")
+    print(f"Sent {publication['sent']:,} messages in {publication['seconds']} s "
+          f"({publication['messages_per_second']:,} messages/s)")
+    print_kafka(publication, check)
+    print(f"Reports: {run / 'publish.json'}, {run / 'verify.json'}")
+    if check["result"] != "PASS":
+        raise SystemExit(1)
+
+
+def command_kafka_verify(args) -> None:
+    publication = json.loads(args.report.read_text(encoding="utf-8"))
+    _, _, consumer = kafka_clients(args.bootstrap or publication["bootstrap"])
+    try:
+        check = verify(publication, consumer, timeout=args.timeout)
+    finally:
+        consumer.close()
+    atomic_json(args.report.with_name(f"verify-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json"), check)
+    print_kafka(publication, check)
+    if check["result"] != "PASS":
+        raise SystemExit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -153,6 +248,29 @@ def main() -> None:
     readback.add_argument("--canonical", type=Path,
                           help="Existing prepared canonical Parquet with its .manifest.json (default: synthetic fixture)")
     readback.set_defaults(handler=command_hdfs_readback)
+    files = commands.add_parser("replay-files", help="Write replay JSONL files from prepared canonical Parquet")
+    files.add_argument("--canonical", type=Path, required=True, help="Prepared Parquet with its .manifest.json")
+    files.add_argument("--run-id", required=True)
+    files.add_argument("--started-at", default="2024-01-02T00:00:00+00:00", help="UTC ingestion time of message 1")
+    files.add_argument("--seed", type=int, default=REPLAY_SEED)
+    files.add_argument("--duplicates", type=int, default=0, help="Seeded producer-retry copies")
+    files.add_argument("--window-minutes", type=int, default=30, choices=(5, 10, 15, 30, 60))
+    files.add_argument("--output", type=Path, help="New directory (default: data/replay/<run-id>)")
+    files.set_defaults(handler=command_replay_files)
+    kafka = commands.add_parser("kafka-publish", help="Publish replay JSONL to Kafka and verify the topic")
+    kafka.add_argument("--input", type=Path, nargs="+", help="JSONL files or directories (default: committed fixture)")
+    kafka.add_argument("--topic", default="harbortrace.replay")
+    kafka.add_argument("--bootstrap", default="127.0.0.1:9092")
+    kafka.add_argument("--partitions", type=int, default=4)
+    kafka.add_argument("--append", action="store_true", help="Allow a topic that already holds messages")
+    kafka.add_argument("--timeout", type=float, default=60, help="Seconds without progress before giving up")
+    kafka.add_argument("--progress-every", type=int, default=0)
+    kafka.set_defaults(handler=command_kafka_publish)
+    check = commands.add_parser("kafka-verify", help="Read back the offsets an earlier publish report recorded")
+    check.add_argument("--report", type=Path, required=True, help="publish.json from kafka-publish")
+    check.add_argument("--bootstrap")
+    check.add_argument("--timeout", type=float, default=60)
+    check.set_defaults(handler=command_kafka_verify)
     args = parser.parse_args()
     args.handler(args)
 

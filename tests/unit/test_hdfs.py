@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from harbortrace.hdfs import Hdfs, HdfsError, publish_file
@@ -32,3 +34,21 @@ def test_publish_refuses_to_overwrite_different_bytes(local_hdfs, tmp_path):
     with pytest.raises(HdfsError, match="Existing remote file differs"):
         publish_file(local_hdfs, changed, "/immutable/data.txt")
     assert publish_file(local_hdfs, original, "/immutable/data.txt")["reused"]
+
+
+def test_java_home_is_found_without_the_variable(monkeypatch):
+    monkeypatch.delenv("JAVA_HOME", raising=False)
+    try:
+        client = Hdfs.from_environment()
+    except HdfsError as error:
+        pytest.skip(str(error))
+    assert (Path(client.env["JAVA_HOME"]) / "bin" / "java").is_file()
+
+
+def test_missing_java_is_an_hdfs_error_not_a_failed_command(monkeypatch):
+    import harbortrace.hdfs as module
+    monkeypatch.delenv("JAVA_HOME", raising=False)
+    monkeypatch.setattr(module, "_runs_java", lambda home: False)
+    monkeypatch.setattr(Path, "is_file", lambda self: True)  # pretend Hadoop is installed
+    with pytest.raises(HdfsError, match="No Java runtime"):
+        Hdfs.from_environment()
