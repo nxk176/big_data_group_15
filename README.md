@@ -34,6 +34,18 @@ PYTHONPATH=src python scripts/analytics_run.py --synthetic
 
 The [serving and analytics guide](docs/serving_analytics_guide.md) covers the boundary formats, MongoDB commands, observed results and the evidence still required. Real-data and deployment evidence is still outstanding.
 
+## Run the processing engine
+
+The engine turns canonical observations into the completed-batch artifact the serving component imports, and turns replay messages into provisional updates with Spark Structured Streaming. Streaming state per vessel is bounded: observations wait in a buffer until the event-time watermark passes them, then feed constant-size visit state machines and are discarded. Both commands below use committed synthetic fixtures and need no running service:
+
+```bash
+python -m pip install -r requirements-engine.txt
+PYTHONPATH=src python scripts/engine_batch.py --fixture
+PYTHONPATH=src python scripts/engine_stream.py --fixture
+```
+
+On one laptop, the batch engine reconstructed 5,081 visits from 3,264,274 real observations (2–15 January 2024), and the streaming engine replayed 236,213 real messages for 1 January from files and from Kafka, producing the same 370 visit identifiers as batch. The [processing engine guide](docs/processing_engine.md) gives the design, commands, measurements and limits. Cluster and long-running service evidence is still outstanding.
+
 ## Run week 5: ingestion and spatial preparation
 
 Week five makes the stage before reconstruction executable: validate position records, assign ports from geographic boundaries, quarantine rejected rows and feed normalized Parquet into Spark. The included example is synthetic and runs without downloading data or starting services.
