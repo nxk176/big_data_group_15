@@ -145,3 +145,53 @@ def reconstruct(observations: list[Observation], ports: list[str], rules: Rules)
     for key in sorted(machines):
         visits.extend(machines[key].close())
     return sorted(visits, key=lambda x: (x.mmsi, x.port_id, x.first_inside))
+
+
+class VesselTracker:
+    """Every port of one vessel, keeping a machine only while a port has an open visit.
+
+    A port without an open visit needs no state of its own: its ``last_outside``,
+    ``previous_time`` and ``previous_logical`` equal the vessel-level values kept here.
+    The output equals one ``VisitMachine`` per port, but the work per observation
+    depends on the ports the vessel is in, not on how many ports are configured.
+    ``ports=None`` accepts every assigned port.
+    """
+
+    def __init__(self, mmsi: str, rules: Rules, ports=None, machine=VisitMachine):
+        self.mmsi, self.rules, self.machine = mmsi, rules, machine
+        self.ports = None if ports is None else frozenset(map(str, ports))
+        self.active: dict[str, VisitMachine] = {}
+        self.last_outside = None
+        self.previous_time = None
+        self.previous_logical = None
+
+    def feed(self, obs: Observation) -> list[Visit]:
+        if obs.mmsi != self.mmsi:
+            raise ValueError("Tracker received another MMSI")
+        if self.previous_time and obs.event_time < self.previous_time:
+            raise ValueError("Observations must be sorted by event time and stable ID")
+        if obs.logical_id == self.previous_logical:
+            return []
+        ambiguous = ("same_time_position_conflict" in obs.quality_flags
+                     or "overlapping_port_polygons" in obs.assignment_flags)
+        port = obs.assignment
+        if port is not None and not ambiguous and port not in self.active                 and (self.ports is None or port in self.ports):
+            opened = self.machine(self.mmsi, port, self.rules)
+            opened.last_outside, opened.previous_time = self.last_outside, self.previous_time
+            opened.previous_logical = self.previous_logical
+            self.active[port] = opened
+        emitted: list[Visit] = []
+        for port_id in sorted(self.active):
+            emitted.extend(self.active[port_id].feed(obs))
+        if self.previous_time and (obs.event_time - self.previous_time).total_seconds() > self.rules.max_gap_minutes * 60:
+            self.last_outside = None
+        if not ambiguous:
+            self.last_outside = obs.event_time
+        self.active = {key: value for key, value in self.active.items() if value.first_inside is not None}
+        self.previous_time, self.previous_logical = obs.event_time, obs.logical_id
+        return emitted
+
+    def close(self) -> list[Visit]:
+        emitted = [visit for port_id in sorted(self.active) for visit in self.active[port_id].close()]
+        self.active = {}
+        return emitted

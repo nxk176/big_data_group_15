@@ -1,0 +1,8 @@
+# Processing engine (Spark batch reconstruction and Structured Streaming).
+-r requirements-week05.txt
+# applyInPandasWithState hands each vessel's messages to Python as pandas frames through Arrow.
+pandas==2.2.3
+numpy==2.1.3
+# The engine tests check their outputs against the serving component's validators.
+pymongo==4.10.1
+mongomock==4.3.0
