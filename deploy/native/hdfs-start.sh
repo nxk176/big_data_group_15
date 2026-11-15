@@ -59,3 +59,25 @@ start_owned() {
 
 start_owned namenode 'org.apache.hadoop.hdfs.server.namenode.NameNode' '9000 9870' namenode
 start_owned datanode 'org.apache.hadoop.hdfs.server.datanode.DataNode' '9866 9864 9867' datanode
+
+# HARBORTRACE_DATANODES=N starts N-1 more DataNodes on this host, each with its own storage
+# directory and ports (+10 per node), so replication > 1 and block placement can be exercised
+# before worker machines exist. They share one disk and host: no protection against host loss.
+datanodes="${HARBORTRACE_DATANODES:-1}"
+for ((index = 2; index <= datanodes; index++)); do
+  offset=$((10 * (index - 1)))
+  conf="$data_dir/hdfs/conf-datanode$index"
+  mkdir -p "$conf" "$data_dir/hdfs/datanode$index"
+  cp "$deploy_dir/core-site.xml" "$deploy_dir/log4j.properties" "$conf/"
+  sed -e "s#/hdfs/datanode<#/hdfs/datanode$index<#" \
+      -e "s#127.0.0.1:9866#127.0.0.1:$((9866 + offset))#" \
+      -e "s#127.0.0.1:9864#127.0.0.1:$((9864 + offset))#" \
+      -e "s#127.0.0.1:9867#127.0.0.1:$((9867 + offset))#" \
+      "$deploy_dir/hdfs-site.xml" >"$conf/hdfs-site.xml"
+  # Hadoop's launcher keeps its own per-role PID file; each extra DataNode needs a separate one.
+  shared_conf="$HADOOP_CONF_DIR" shared_pid_dir="${HADOOP_PID_DIR:-}"
+  export HADOOP_CONF_DIR="$conf" HADOOP_PID_DIR="$pid_dir/hadoop-datanode$index"
+  start_owned "datanode$index" 'org.apache.hadoop.hdfs.server.datanode.DataNode' \
+    "$((9866 + offset)) $((9864 + offset)) $((9867 + offset))" datanode
+  export HADOOP_CONF_DIR="$shared_conf" HADOOP_PID_DIR="$shared_pid_dir"
+done
