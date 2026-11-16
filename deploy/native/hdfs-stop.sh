@@ -35,5 +35,8 @@ stop_owned() {
   exit 1
 }
 
-stop_owned datanode 'org.apache.hadoop.hdfs.server.datanode.DataNode'
+for pid_file in "$pid_dir"/datanode*.pid; do
+  [[ -e "$pid_file" ]] || continue
+  stop_owned "$(basename "$pid_file" .pid)" 'org.apache.hadoop.hdfs.server.datanode.DataNode'
+done
 stop_owned namenode 'org.apache.hadoop.hdfs.server.namenode.NameNode'

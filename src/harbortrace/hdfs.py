@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -77,6 +78,14 @@ class Hdfs:
             raise HdfsError(f"hdfs dfs {' '.join(args)} failed ({result.returncode}): {result.stderr.strip()[-500:]}")
         return result
 
+    def configured(self, key: str) -> str:
+        """A value from the cluster configuration (HADOOP_CONF_DIR), e.g. dfs.replication."""
+        result = subprocess.run([str(self.binary), "getconf", "-confKey", key], capture_output=True, text=True,
+                                env=self._environment(), check=False)
+        if result.returncode != 0:
+            raise HdfsError(f"hdfs getconf {key} failed: {result.stderr.strip()[-500:]}")
+        return result.stdout.strip()
+
     def exists(self, path: str) -> bool:
         return self.dfs("-test", "-e", self.url(path), check=False).returncode == 0
 
@@ -96,6 +105,42 @@ class Hdfs:
         if process.wait() != 0:
             raise HdfsError(f"hdfs dfs -cat {path} failed: {stderr.strip()[-500:]}")
         return digest.hexdigest()
+
+
+def parse_fsck(text: str) -> dict:
+    """Summary and per-DataNode replica counts from `hdfs fsck <path> -files -blocks -locations`."""
+    blocks, per_node, live = 0, {}, {}
+    for line in text.splitlines():
+        found = re.search(r"Live_repl=(\d+)", line)
+        if not found:
+            continue
+        blocks += 1
+        live[int(found.group(1))] = live.get(int(found.group(1)), 0) + 1
+        for node in re.findall(r"DatanodeInfoWithStorage\[([^,\]]+)", line):
+            per_node[node] = per_node.get(node, 0) + 1
+
+    def number(label: str) -> int | None:
+        found = re.search(rf"^\s*{re.escape(label)}:\s*(\d+)", text, re.MULTILINE)
+        return int(found.group(1)) if found else None
+
+    status = re.search(r"^Status: (\w+)", text, re.MULTILINE)
+    return {"status": status.group(1) if status else None, "files": number("Total files"),
+            "blocks": blocks, "datanodes": number("Number of data-nodes"),
+            "live_replicas": {str(k): v for k, v in sorted(live.items())},
+            "replicas_per_datanode": dict(sorted(per_node.items())),
+            "under_replicated": number("Under-replicated blocks"), "missing_blocks": number("Missing blocks"),
+            "corrupt_blocks": number("Corrupt blocks")}
+
+
+def block_report(hdfs: Hdfs, path: str) -> dict:
+    """Where every block of ``path`` lives, as the NameNode reports it."""
+    result = subprocess.run([str(hdfs.binary), "fsck", hdfs.url(path).replace(hdfs.uri, "", 1) or "/",
+                             "-files", "-blocks", "-locations"], capture_output=True, text=True,
+                            env=hdfs._environment(), check=False)
+    report = parse_fsck(result.stdout)
+    if report["status"] is None:
+        raise HdfsError(f"hdfs fsck {path} gave no status: {result.stderr.strip()[-500:]}")
+    return report
 
 
 def publish_file(hdfs: Hdfs, local: Path, remote: str) -> dict:

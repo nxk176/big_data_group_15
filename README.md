@@ -49,9 +49,10 @@ PYTHONPATH=src python scripts/week05_ingestion.py                # synthetic sou
 PYTHONPATH=src python scripts/data_storage.py fixtures --check   # boundary fixtures still match a fresh preparation
 PYTHONPATH=src python scripts/data_storage.py hdfs-readback      # needs a running HDFS (deploy/native/hdfs-*.sh)
 PYTHONPATH=src python scripts/data_storage.py kafka-publish      # needs a running Kafka (deploy/native/kafka-*.sh)
+PYTHONPATH=src python scripts/data_storage.py spark-prepare      # Spark preparation, compared row for row with the above
 ```
 
-The synthetic source accounts for 14 rows: 7 canonical, 3 invalid, 1 duplicate, 2 conflicting and 1 outside the region. On the real 1 January replay, all 236,213 messages published to Kafka were read back with identical accounting, also after a broker restart, and the streaming engine produced the same 370 visit identifiers from that topic as batch. Guides: [data and infrastructure](docs/data_infrastructure.md) (fixtures, portable HDFS and Kafka scripts, readback and replay results, limits) and [ingestion and spatial preparation](docs/week05_ingestion.md) (processing path, real pilot of 7,293,408 source rows, acquisition command).
+The synthetic source accounts for 14 rows: 7 canonical, 3 invalid, 1 duplicate, 2 conflicting and 1 outside the region. On the real 1 January replay, all 236,213 messages published to Kafka were read back with identical accounting, also after a broker restart, and the streaming engine produced the same 370 visit identifiers from that topic as batch. Spark preparation equals the single-process preparation row for row on the real day and stores day-partitioned canonical data on HDFS with two replicas: fifteen days for every usable port (105,953,905 observations, 15.6 GB) in 21 minutes on one laptop. Guides: [data and infrastructure](docs/data_infrastructure.md) (fixtures, portable HDFS and Kafka scripts, readback and replay results, limits) and [ingestion and spatial preparation](docs/week05_ingestion.md) (processing path, real pilot of 7,293,408 source rows, acquisition command).
 
 ## Processing engine — Nguyen Xuan Khai
 
