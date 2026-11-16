@@ -57,5 +57,5 @@ def test_several_sources_split_by_day_and_output_is_immutable(spark, tmp_path):
     assert identities == 14  # the same rows in two files keep distinct source identities
     with pytest.raises(PrepareError, match="immutable"):
         prepare_spark(spark, [first], boundaries, output, ports=["9001"])
-    assert not (tmp_path / ".spark.partial").exists()
+    assert not (tmp_path / ".spark.partial").exists() and not (tmp_path / ".spark.staging").exists()
 

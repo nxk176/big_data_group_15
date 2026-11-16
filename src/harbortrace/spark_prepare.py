@@ -130,11 +130,13 @@ def prepare_spark(spark, sources: list[Path], boundaries: Path, output: str, *, 
     filesystem, final = _filesystem(spark, output)
     if filesystem.exists(final):
         raise PrepareError(f"Output already exists and is immutable: {output}")
-    partial = output.rstrip("/").rsplit("/", 1)
-    partial = f"{partial[0]}/.{partial[1]}.partial"
+    parent, name = output.rstrip("/").rsplit("/", 1)
+    partial, staging = f"{parent}/.{name}.partial", f"{parent}/.{name}.staging"
     _, partial_path = _filesystem(spark, partial)
-    if filesystem.exists(partial_path):
-        filesystem.delete(partial_path, True)  # a previous attempt crashed before publishing
+    _, staging_path = _filesystem(spark, staging)
+    for leftover in (partial_path, staging_path):
+        if filesystem.exists(leftover):
+            filesystem.delete(leftover, True)  # a previous attempt crashed before publishing
 
     raw = spark.read.parquet(*[str(source) for source in sources])
     absent = [name for name in ("mmsi", "base_date_time", "geometry") if name not in raw.columns]
@@ -146,44 +148,47 @@ def prepare_spark(spark, sources: list[Path], boundaries: Path, output: str, *, 
     source = raw.select(*columns, F.col("_metadata.file_name").alias("source_file"),
                         F.col("_metadata.row_index").alias("source_row"))
     broadcast = spark.sparkContext.broadcast(selected)
-    prepared = source.mapInArrow(_prepare_function(broadcast, bounds, boundary_jitter_meters),
-                                 PREPARED_DDL).persist()
+    # Intermediate results are staged as Parquet, not cached: persist() of a fifteen-day all-port
+    # input (106 million rows) exhausted an 8 GB heap, while staged files are read back in batches.
     try:
-        group = Window.partitionBy("mmsi", "event_time")
-        region = (prepared.where("status = 'region'")
-                  .withColumn("_low", F.min("logical_id").over(group))
-                  .withColumn("_high", F.max("logical_id").over(group))
-                  .withColumn("_kept", F.min("source_row").over(group))
-                  .withColumn("_group", F.count(F.lit(1)).over(group)))
-        # One logical observation keeps its first source row; differing positions reject the whole group.
-        region = region.withColumn("status", F.when(F.col("_low") != F.col("_high"), "conflict")
-                                   .when(F.col("source_row") != F.col("_kept"), "duplicate")
-                                   .otherwise("canonical")).persist()
-        oversized = region.where("_group > 10000").limit(1).collect()
-        if oversized:
-            raise PrepareError(f"More than 10,000 records for one MMSI/time group: {oversized[0]['mmsi']}; inspect source")
-        canonical = (region.where("status = 'canonical'").select(*CANONICAL_COLUMNS)
-                     .withColumn("day", F.substring("event_time", 1, 10)))
-        (canonical.repartition("day").sortWithinPartitions("mmsi", "event_time", "logical_id", "source_row")
-         .write.partitionBy("day").parquet(partial))
-        rejected_rows = (prepared.where("status = 'invalid'").select("source_file", "source_row", "reason")
-                         .withColumn("kept_source_row", F.lit(None).cast("long"))
-                         .unionByName(region.where("status = 'conflict'").select(
-                             "source_file", "source_row", F.lit("same_time_position_conflict").alias("reason"),
-                             F.lit(None).cast("long").alias("kept_source_row")))
-                         .unionByName(region.where("status = 'duplicate'").select(
-                             "source_file", "source_row", F.lit("duplicate").alias("reason"),
-                             F.col("_kept").alias("kept_source_row"))))
-        rejected_rows.orderBy("source_file", "source_row").coalesce(1).write.json(f"{partial}/_quarantine")
-        status = {row["status"]: row["count"] for row in prepared.groupBy("status").count().collect()}
-        resolved = {row["status"]: row["count"] for row in region.groupBy("status").count().collect()}
-        per_source = {row["source_file"]: row["count"] for row in prepared.groupBy("source_file").count().collect()}
-        per_day = {str(row["day"]): row["count"]
-                   for row in spark.read.parquet(partial).groupBy("day").count().collect()}
+        (source.mapInArrow(_prepare_function(broadcast, bounds, boundary_jitter_meters), PREPARED_DDL)
+         .write.parquet(f"{staging}/prepared"))
     finally:
-        prepared.unpersist()
         broadcast.unpersist()
-    region.unpersist()
+    prepared = spark.read.parquet(f"{staging}/prepared")
+    group = Window.partitionBy("mmsi", "event_time")
+    # One logical observation keeps its first source row; differing positions reject the whole group.
+    (prepared.where("status = 'region'")
+     .withColumn("_low", F.min("logical_id").over(group))
+     .withColumn("_high", F.max("logical_id").over(group))
+     .withColumn("_kept", F.min("source_row").over(group))
+     .withColumn("_group", F.count(F.lit(1)).over(group))
+     .withColumn("status", F.when(F.col("_low") != F.col("_high"), "conflict")
+                 .when(F.col("source_row") != F.col("_kept"), "duplicate").otherwise("canonical"))
+     .drop("_low", "_high").write.parquet(f"{staging}/resolved"))
+    region = spark.read.parquet(f"{staging}/resolved")
+    oversized = region.where("_group > 10000").limit(1).collect()
+    if oversized:
+        raise PrepareError(f"More than 10,000 records for one MMSI/time group: {oversized[0]['mmsi']}; inspect source")
+    canonical = (region.where("status = 'canonical'").select(*CANONICAL_COLUMNS)
+                 .withColumn("day", F.substring("event_time", 1, 10)))
+    (canonical.repartition("day").sortWithinPartitions("mmsi", "event_time", "logical_id", "source_row")
+     .write.partitionBy("day").parquet(partial))
+    rejected_rows = (prepared.where("status = 'invalid'").select("source_file", "source_row", "reason")
+                     .withColumn("kept_source_row", F.lit(None).cast("long"))
+                     .unionByName(region.where("status = 'conflict'").select(
+                         "source_file", "source_row", F.lit("same_time_position_conflict").alias("reason"),
+                         F.lit(None).cast("long").alias("kept_source_row")))
+                     .unionByName(region.where("status = 'duplicate'").select(
+                         "source_file", "source_row", F.lit("duplicate").alias("reason"),
+                         F.col("_kept").alias("kept_source_row"))))
+    rejected_rows.orderBy("source_file", "source_row").coalesce(1).write.json(f"{partial}/_quarantine")
+    status = {row["status"]: row["count"] for row in prepared.groupBy("status").count().collect()}
+    resolved = {row["status"]: row["count"] for row in region.groupBy("status").count().collect()}
+    per_source = {row["source_file"]: row["count"] for row in prepared.groupBy("source_file").count().collect()}
+    per_day = {str(row["day"]): row["count"]
+               for row in spark.read.parquet(partial).groupBy("day").count().collect()}
+    filesystem.delete(staging_path, True)
     accounting = {"source_rows": sum(status.values()), "invalid": status.get("invalid", 0),
                   "outside_region": status.get("outside_region", 0), "region_rows": status.get("region", 0),
                   "canonical_rows": resolved.get("canonical", 0), "duplicate_rows": resolved.get("duplicate", 0),
