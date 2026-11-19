@@ -79,6 +79,10 @@ The [serving and analytics guide](docs/serving_analytics_guide.md) covers the bo
 
 The [week-6 serving evidence](docs/week06_serving.md) records 12 passing integration tests against a real local MongoDB server with synthetic inputs.
 
+The [weeks 7–15 evidence](docs/serving_evidence.md) records directory imports, concurrency fixes, consistent dashboard filters, and analytics execution.
+It includes local MongoDB/HTTP measurements and a small real AIS integration example.
+Huy's [report contribution](docs/serving_report.md) and [presentation source](docs/serving_presentation.md) state the remaining real-data and deployment requirements.
+
 ## Data and design references
 
 - [Proposal](docs/week01_proposal.md) and [Hadoop/HDFS note](docs/week02_hadoop.md).
