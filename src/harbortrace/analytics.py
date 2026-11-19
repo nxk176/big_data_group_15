@@ -366,8 +366,9 @@ def clustering_gate(profiles, *, min_ports: int = MIN_QUALIFYING_PORTS,
 def cluster_ports(profiles, *, k_values=(2, 3, 4), seeds=(1, 2, 3), synthetic: bool,
                   min_ports: int = MIN_QUALIFYING_PORTS,
                   min_complete: int = MIN_COMPLETE_VISITS_PER_PORT) -> dict:
-    """KMeans port-profile clustering evaluated by silhouette and seed stability.
+    """KMeans evaluated by mean silhouette and seed stability.
 
+    The exported assignment belongs to the first seed, whose own score is recorded.
     Refuses to fit when the usable-sample gate fails; it never pads the input.
     """
     from pyspark.ml import Pipeline
@@ -376,12 +377,27 @@ def cluster_ports(profiles, *, k_values=(2, 3, 4), seeds=(1, 2, 3), synthetic: b
     from pyspark.ml.feature import StandardScaler, VectorAssembler
     from pyspark.sql import functions as F
 
+    seeds, k_values = tuple(seeds), tuple(k_values)
+    if not seeds:
+        raise ValueError("seeds must contain at least one seed")
+    if not k_values or any(k < 2 for k in k_values):
+        raise ValueError("k_values must contain integers >= 2")
     gate = clustering_gate(profiles, min_ports=min_ports, min_complete=min_complete)
     label = "synthetic_plumbing_only" if synthetic else "real_data"
     if not gate["usable"]:
         return {"status": "insufficient_data", "label": label, "gate": gate}
+    if not any(k < gate["qualifying_ports"] for k in k_values):
+        raise ValueError("k_values must include a k smaller than the qualifying port count")
     data = profiles.where(F.col("port_id").isin(gate["qualifying_port_ids"])).fillna(0.0, subset=FEATURES).cache()
+    features = None
     try:
+        # Fit seed-independent preprocessing once, then materialize it for all KMeans fits.
+        preprocessing = Pipeline(stages=[
+            VectorAssembler(inputCols=FEATURES, outputCol="raw_features"),
+            StandardScaler(inputCol="raw_features", outputCol="features", withMean=True, withStd=True),
+        ])
+        features = preprocessing.fit(data).transform(data).select("port_id", "features").cache()
+        features.count()
         evaluator = ClusteringEvaluator(featuresCol="features", predictionCol="cluster", metricName="silhouette")
         results = []
         for k in k_values:
@@ -389,21 +405,23 @@ def cluster_ports(profiles, *, k_values=(2, 3, 4), seeds=(1, 2, 3), synthetic: b
                 continue
             scores, assignments = [], []
             for seed in seeds:
-                pipeline = Pipeline(stages=[
-                    VectorAssembler(inputCols=FEATURES, outputCol="raw_features"),
-                    StandardScaler(inputCol="raw_features", outputCol="features", withMean=True, withStd=True),
-                    KMeans(k=k, seed=seed, featuresCol="features", predictionCol="cluster"),
-                ])
-                predicted = pipeline.fit(data).transform(data)
-                scores.append(evaluator.evaluate(predicted))
-                assignments.append({r["port_id"]: r["cluster"] for r in predicted.select("port_id", "cluster").collect()})
+                predicted = KMeans(k=k, seed=seed, featuresCol="features", predictionCol="cluster").fit(features).transform(features).cache()
+                try:
+                    scores.append(evaluator.evaluate(predicted))
+                    assignments.append({r["port_id"]: r["cluster"] for r in predicted.select("port_id", "cluster").collect()})
+                finally:
+                    predicted.unpersist()
             results.append({"k": k, "silhouette_mean": sum(scores) / len(scores),
                             "silhouette_min": min(scores), "silhouette_max": max(scores),
+                            "seed_scores": [{"seed": seed, "silhouette": score} for seed, score in zip(seeds, scores)],
+                            "representative_seed": seeds[0], "representative_silhouette": scores[0],
                             "seed_agreement": _pair_agreement(assignments), "assignment": assignments[0]})
-        best = max(results, key=lambda r: (r["silhouette_mean"], -r["k"])) if results else None
+        best = max(results, key=lambda r: (r["silhouette_mean"], -r["k"]))
         return {"status": "evaluated", "label": label, "gate": gate, "features": FEATURES,
-                "candidates": results, "selected": best}
+                "selection_metric": "silhouette_mean_across_seeds", "candidates": results, "selected": best}
     finally:
+        if features is not None:
+            features.unpersist()
         data.unpersist()
 
 
@@ -443,26 +461,33 @@ def graph_metrics(enriched, *, use_graphframes: bool = True) -> dict:
     """
     from pyspark.sql import functions as F
     edges = port_transitions(enriched).cache()
-    vertices = enriched.select(F.col("port_id").alias("id")).distinct()
+    vertices = enriched.select(F.col("port_id").alias("id")).distinct().cache()
     try:
         out_degree = edges.groupBy(F.col("src").alias("id")).agg(F.sum("transitions").alias("out_transitions"))
         in_degree = edges.groupBy(F.col("dst").alias("id")).agg(F.sum("transitions").alias("in_transitions"))
         degrees = (vertices.join(out_degree, "id", "left").join(in_degree, "id", "left")
                    .fillna(0).orderBy(F.desc("in_transitions"), "id"))
-        result = {"engine": "dataframe", "vertices": vertices.count(), "edges": edges.count(),
-                  "degrees": [r.asDict() for r in degrees.collect()],
-                  "top_edges": [r.asDict() for r in edges.limit(10).collect()]}
+        degree_rows = [r.asDict() for r in degrees.collect()]
+        result = {"engine": "dataframe", "vertices": len(degree_rows), "edges": edges.count(),
+                  "degrees": degree_rows, "top_edges": [r.asDict() for r in edges.limit(10).collect()],
+                  "graphframes_status": "disabled"}
+        if not degree_rows:
+            result["graphframes_status"] = "skipped_empty_graph"
+            return result
         if use_graphframes:
             try:
                 from graphframes import GraphFrame
                 graph = GraphFrame(vertices, edges.withColumnRenamed("transitions", "weight"))
                 ranks = graph.pageRank(resetProbability=0.15, maxIter=20).vertices
-                result["engine"] = "graphframes"
-                result["pagerank"] = [r.asDict() for r in ranks.orderBy(F.desc("pagerank")).collect()]
+                pagerank = [r.asDict() for r in ranks.orderBy(F.desc("pagerank"), "id").collect()]
                 components = graph.stronglyConnectedComponents(maxIter=10)
-                result["strongly_connected_components"] = components.select("component").distinct().count()
-            except Exception as error:  # package or JAR missing
+                component_count = components.select("component").distinct().count()
+                result.update(engine="graphframes", graphframes_status="executed", pagerank=pagerank,
+                              pagerank_edge_weighting="unweighted", strongly_connected_components=component_count)
+            except Exception as error:  # package, JAR or execution failure: retain complete DataFrame metrics
+                result["graphframes_status"] = "unavailable_or_failed"
                 result["graphframes_unavailable"] = f"{type(error).__name__}: {str(error)[:200]}"
         return result
     finally:
+        vertices.unpersist()
         edges.unpersist()

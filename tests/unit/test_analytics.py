@@ -145,3 +145,29 @@ def _visit(mmsi, port, first):
             "left_censored": False, "right_censored": False, "quality_flags": [],
             "source_record_ids": ["a" * 64], "source_record_count": 1, "source_digest": "b" * 64,
             "rule_version": "visits-v1", "status": "reconciled"}
+
+
+def test_clustering_assignment_identifies_its_seed_and_score(enriched):
+    result = analytics.cluster_ports(analytics.port_profiles(enriched), k_values=(2,), seeds=(7, 19),
+                                     synthetic=True)
+    selected = result['selected']
+    assert selected['representative_seed'] == 7
+    assert selected['representative_silhouette'] == selected['seed_scores'][0]['silhouette']
+    assert [entry['seed'] for entry in selected['seed_scores']] == [7, 19]
+    assert set(selected['assignment']) == set(result['gate']['qualifying_port_ids'])
+
+
+def test_clustering_rejects_empty_candidate_configuration(enriched):
+    with pytest.raises(ValueError, match='seeds'):
+        analytics.cluster_ports(analytics.port_profiles(enriched), seeds=(), synthetic=True)
+    with pytest.raises(ValueError, match='k_values'):
+        analytics.cluster_ports(analytics.port_profiles(enriched), k_values=(1,), synthetic=True)
+
+
+def test_empty_input_has_no_time_series_or_graph_vertices(spark):
+    empty = analytics.enrich(analytics.visits_frame(spark, []))
+    assert analytics.daily_time_series(empty).collect() == []
+    result = analytics.graph_metrics(empty)
+    assert result['vertices'] == result['edges'] == 0
+    assert result['degrees'] == result['top_edges'] == []
+    assert result['graphframes_status'] == 'skipped_empty_graph'
