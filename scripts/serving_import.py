@@ -85,6 +85,11 @@ def cmd_status(_args, db):
           "health": serving.health(db)})
 
 
+def cmd_directory(args, db):
+    from harbortrace.update_import import apply_directory
+    show(apply_directory(db, args.directory, source_id=args.source_id))
+
+
 def cmd_activate(args, db):
     token = serving.acquire_lease(db, args.owner)
     activated = serving.activate_generation(db, args.generation, token, reason="operator")
@@ -184,6 +189,10 @@ def main():
     p = commands.add_parser("apply-updates", help="Apply provisional updates from a JSON file")
     p.add_argument("file", type=Path)
     p.set_defaults(func=cmd_updates)
+    p = commands.add_parser("apply-directory", help="Apply complete engine updates/batch=*/ directories")
+    p.add_argument("directory", type=Path)
+    p.add_argument("--source-id", help="Stable receipt identity, preserved when the directory moves")
+    p.set_defaults(func=cmd_directory)
     commands.add_parser("status").set_defaults(func=cmd_status)
     p = commands.add_parser("activate")
     p.add_argument("generation")
@@ -197,7 +206,8 @@ def main():
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
     try:
         args.func(args, None if getattr(args, "no_db", False) else database(args))
-    except serving.ValidationError as error:
+    except (serving.ValidationError, serving.ConflictError, serving.FencedError,
+            serving.ConcurrentUpdateError) as error:
         print(f"REJECTED: {error}", file=sys.stderr)
         sys.exit(2)
 

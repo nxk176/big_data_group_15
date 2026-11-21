@@ -3,6 +3,7 @@ import copy
 import json
 import shutil
 import sys
+import tracemalloc
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -200,6 +201,50 @@ def test_fencing_rejects_a_stale_publisher(db, gen_a, gen_b):
     assert serving.METRICS.counters["fenced_writes"] == 1
 
 
+def test_expired_lease_cannot_activate_without_a_successor(db, gen_a, monkeypatch):
+    serving.publish(db, gen_a, owner="p1", activate=False)
+    now = datetime.now(timezone.utc)
+    token = serving.acquire_lease(db, "slow", ttl_seconds=10, now=now)
+    monkeypatch.setattr(serving, "utc_now", lambda: now + timedelta(seconds=10))
+    with pytest.raises(serving.FencedError):
+        serving.activate_generation(db, gen_a.generation_id, token)
+    assert serving.Reader(db).active_generation() is None
+    assert serving.METRICS.counters["fenced_writes"] == 1
+
+
+@pytest.mark.parametrize("stage", ["initialization", "completion"])
+def test_stale_publisher_cannot_mutate_newer_generation_metadata(db, gen_a, monkeypatch, stage):
+    collection = db[serving.GENERATIONS]
+    method = "replace_one" if stage == "initialization" else "update_one"
+    original = getattr(collection, method)
+    raced = False
+    winner = None
+
+    def write_after_takeover(*args, **kwargs):
+        nonlocal raced, winner
+        if not raced:
+            raced = True
+            db[serving.LEASES].update_one({"_id": "publisher"},
+                                         {"$set": {"expires_at": "2000-01-01T00:00:00+00:00"}})
+            if stage == "initialization":
+                serving.publish(db, gen_a, owner="fast")
+            else:
+                with pytest.raises(RuntimeError, match="simulated"):
+                    serving.publish(db, gen_a, owner="fast", fail_after_visits=2)
+            winner = collection.find_one({"_id": gen_a.generation_id})
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(collection, method, write_after_takeover)
+    with pytest.raises(serving.FencedError):
+        serving.publish(db, gen_a, owner="slow")
+    assert collection.find_one({"_id": gen_a.generation_id}) == winner
+    if stage == "initialization":
+        assert serving.Reader(db).visits(serving.VisitQuery())["total"] == len(gen_a.visits)
+    else:
+        assert winner["status"] == "loading" and winner["fence_token"] == 2
+        assert "completed_at" not in winner
+
+
 def test_rollback_and_drop_rules(db, gen_a, gen_b):
     serving.publish(db, gen_a, owner="p1")
     serving.publish(db, gen_b, owner="p1")
@@ -274,8 +319,9 @@ def test_provisional_fixture_sequence(db):
         assert outcome == step["expect"], step["update"]["seq"]
         visible = reader.provisional(serving.VisitQuery())
         assert sorted(v["visit_id"] for v in visible["visits"]) == step["visit_ids"]
-        # Only the pointed-to sequence is ever stored after an update completes.
-        assert len(db[serving.PROVISIONAL].distinct("seq")) == 1
+        # Old snapshots remain available for readers that pinned before this update.
+        cohort = db[serving.COHORTS].find_one({"_id": step["update"]["cohort_id"]})
+        assert db[serving.PROVISIONAL].count_documents({"snapshot_id": cohort["snapshot_id"]}) == visible["total"]
     assert serving.METRICS.counters["provisional_stale_rejected"] == 1
 
 
@@ -294,7 +340,7 @@ def test_provisional_reader_ignores_uncommitted_sequence(db):
     (lambda u: u.update(update_id="0" * 64), "update_id"),
     (lambda u: u.update(mode="append"), "mode"),
     (lambda u: u.update(seq=0), "positive"),
-    (lambda u: u.update(deleted_visit_ids=["x"]), "delete mode"),
+    (lambda u: u.update(deleted_visit_ids=["a" * 64]), "delete mode"),
     (lambda u: u.update(emitted_at="2026-11-02T00:00:00"), "UTC offset"),
     (lambda u: u.update(visits=u["visits"] + u["visits"][:1]), "duplicate visit_id"),
 ])
@@ -303,6 +349,196 @@ def test_update_validation(db, change, message):
     change(update)
     with pytest.raises(serving.ValidationError, match=message):
         serving.apply_update(db, update)
+
+
+def provisional_update(seq=1, *, visits=None, mode="snapshot", deleted=None):
+    update = copy.deepcopy(json.loads((FIXTURES / "provisional_updates.json").read_text())["steps"][0]["update"])
+    update.update(seq=seq, update_id=digest(update["cohort_id"], seq), mode=mode)
+    if visits is not None:
+        update["visits"] = visits
+    if deleted is not None:
+        update["deleted_visit_ids"] = deleted
+    return update
+
+
+@pytest.mark.parametrize("value", [None, [], 1, "update"])
+def test_update_container_validation(db, value):
+    with pytest.raises(serving.ValidationError, match="object"):
+        serving.apply_update(db, value)
+    assert db[serving.COHORTS].count_documents({}) == 0
+
+
+@pytest.mark.parametrize("field, value, message", [
+    ("cohort_id", "", "cohort_id"), ("cohort_id", "  ", "cohort_id"),
+    ("cohort_id", {"$ne": "x"}, "cohort_id"), ("cohort_id", 42, "cohort_id"),
+    ("visits", None, "visits"), ("visits", {}, "visits"),
+    ("visits", "visits", "visits"), ("visits", [None], "object"),
+    ("deleted_visit_ids", None, "deleted_visit_ids"),
+    ("deleted_visit_ids", "a" * 64, "deleted_visit_ids"),
+    ("deleted_visit_ids", ["bad"], "SHA-256"),
+    ("deleted_visit_ids", [{"$ne": "x"}], "SHA-256"),
+    ("deleted_visit_ids", ["a" * 64, "a" * 64], "duplicate"),
+])
+def test_malformed_update_fields_leave_database_unchanged(db, field, value, message):
+    update = provisional_update()
+    update[field] = value
+    with pytest.raises(serving.ValidationError, match=message):
+        serving.apply_update(db, update)
+    assert db[serving.COHORTS].count_documents({}) == 0
+    assert db[serving.PROVISIONAL].count_documents({}) == 0
+
+
+def test_retry_timestamp_is_attempt_metadata_and_preserves_winner(db):
+    update = provisional_update()
+    serving.apply_update(db, update)
+    winning_timestamp = update["emitted_at"]
+    update["emitted_at"] = "2026-11-02T00:00:01+00:00"
+    assert serving.apply_update(db, update)["result"] == "duplicate_ignored"
+    visible = serving.Reader(db).provisional(serving.VisitQuery())
+    assert visible["cohorts"][0]["emitted_at"] == winning_timestamp
+    assert {v["emitted_at"] for v in visible["visits"]} == {winning_timestamp}
+
+
+@pytest.mark.parametrize("initial", [False, True])
+@pytest.mark.parametrize("identical", [False, True])
+@pytest.mark.parametrize("different_timestamp", [False, True])
+def test_racing_updates_preserve_winner_and_retry_semantics(db, monkeypatch, initial, identical, different_timestamp):
+    base = provisional_update()
+    if not initial:
+        serving.apply_update(db, base)
+    seq = 1 if initial else 2
+    winner = provisional_update(seq, visits=base["visits"][:1])
+    loser = copy.deepcopy(winner) if identical else provisional_update(seq, visits=base["visits"][1:])
+    if different_timestamp:
+        loser["emitted_at"] = "2026-11-02T00:00:01+00:00"
+    collection = db[serving.PROVISIONAL]
+    original = collection.bulk_write
+    raced = False
+
+    def write_after_winner(*args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            serving.apply_update(db, winner)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(collection, "bulk_write", write_after_winner)
+    if identical:
+        assert serving.apply_update(db, loser)["result"] == "duplicate_ignored"
+    else:
+        with pytest.raises(serving.ConflictError):
+            serving.apply_update(db, loser)
+    visible = serving.Reader(db).provisional(serving.VisitQuery())
+    assert [v["visit_id"] for v in visible["visits"]] == [winner["visits"][0]["visit_id"]]
+    assert visible["cohorts"][0]["visit_count"] == visible["total"] == 1
+    assert visible["cohorts"][0]["emitted_at"] == winner["emitted_at"]
+    assert {v["emitted_at"] for v in visible["visits"]} == {winner["emitted_at"]}
+
+
+def test_provisional_reader_pins_snapshot_while_update_commits(db, monkeypatch):
+    first = provisional_update()
+    serving.apply_update(db, first)
+    collection = db[serving.COHORTS]
+    original = collection.find
+
+    def update_after_pinning(*args, **kwargs):
+        if args[0] != {}:
+            return original(*args, **kwargs)
+        cohorts = list(original(*args, **kwargs))
+        serving.apply_update(db, provisional_update(2, visits=first["visits"][:1]))
+        return cohorts
+
+    monkeypatch.setattr(collection, "find", update_after_pinning)
+    visible = serving.Reader(db).provisional(serving.VisitQuery())
+    assert visible["cohorts"][0]["seq"] == 1
+    assert {v["visit_id"] for v in visible["visits"]} == {v["visit_id"] for v in first["visits"]}
+
+
+def test_initialization_race_handles_duplicate_key(db, monkeypatch):
+    winner = provisional_update(visits=provisional_update()["visits"][:1])
+    loser = provisional_update(visits=provisional_update()["visits"][1:])
+    collection = db[serving.COHORTS]
+    original = collection.insert_one
+    raced = False
+
+    def insert_after_winner(*args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            serving.apply_update(db, winner)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(collection, "insert_one", insert_after_winner)
+    with pytest.raises(serving.ConflictError):
+        serving.apply_update(db, loser)
+    visible = serving.Reader(db).provisional(serving.VisitQuery())
+    assert [v["visit_id"] for v in visible["visits"]] == [winner["visits"][0]["visit_id"]]
+
+
+def test_same_update_based_on_different_snapshots_cannot_mix_rows(db, monkeypatch):
+    first = provisional_update()
+    serving.apply_update(db, first)
+    update = provisional_update(3, visits=first["visits"][:1], mode="upsert")
+    collection = db[serving.PROVISIONAL]
+    original = collection.bulk_write
+    raced = False
+
+    def write_after_newer_base(*args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            serving.apply_update(db, provisional_update(2, visits=[], mode="delete",
+                                                        deleted=[first["visits"][1]["visit_id"]]))
+            serving.apply_update(db, update)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(collection, "bulk_write", write_after_newer_base)
+    assert serving.apply_update(db, update)["result"] == "duplicate_ignored"
+    visible = serving.Reader(db).provisional(serving.VisitQuery())
+    assert [v["visit_id"] for v in visible["visits"]] == [first["visits"][0]["visit_id"]]
+    assert visible["total"] == visible["cohorts"][0]["visit_count"] == 1
+
+
+def test_newer_update_losing_cas_is_retryable_and_rebuilds_from_winner(db, monkeypatch):
+    first = provisional_update()
+    serving.apply_update(db, first)
+    later = provisional_update(3, visits=first["visits"][:1], mode="upsert")
+    collection = db[serving.PROVISIONAL]
+    original = collection.bulk_write
+    raced = False
+
+    def write_after_earlier_winner(*args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            serving.apply_update(db, provisional_update(2, visits=[], mode="delete",
+                                                        deleted=[first["visits"][1]["visit_id"]]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(collection, "bulk_write", write_after_earlier_winner)
+    with pytest.raises(serving.ConcurrentUpdateError, match="retry"):
+        serving.apply_update(db, later)
+    assert serving.Reader(db).provisional(serving.VisitQuery())["cohorts"][0]["seq"] == 2
+    assert serving.apply_update(db, later)["result"] == "applied"
+    visible = serving.Reader(db).provisional(serving.VisitQuery())
+    assert visible["cohorts"][0]["seq"] == 3
+    assert [v["visit_id"] for v in visible["visits"]] == [first["visits"][0]["visit_id"]]
+
+
+def test_legacy_cohort_can_be_read_and_extended(db):
+    update = provisional_update()
+    cohort_id = update["cohort_id"]
+    db[serving.COHORTS].insert_one({"_id": cohort_id, "seq": 1, "applied": {},
+                                  "visit_count": 2, "emitted_at": update["emitted_at"]})
+    for visit in update["visits"]:
+        db[serving.PROVISIONAL].insert_one({"_id": f"legacy:{visit['visit_id']}",
+                                          "cohort_id": cohort_id, "seq": 1, **visit})
+    assert serving.Reader(db).provisional(serving.VisitQuery())["total"] == 2
+    serving.apply_update(db, provisional_update(2, visits=[], mode="delete",
+                                                deleted=[update["visits"][0]["visit_id"]]))
+    visible = serving.Reader(db).provisional(serving.VisitQuery())
+    assert [v["visit_id"] for v in visible["visits"]] == [update["visits"][1]["visit_id"]]
+    assert db[serving.PROVISIONAL].count_documents({"seq": 1}) == 2
 
 
 def test_metrics_export():
@@ -314,3 +550,43 @@ def test_metrics_export():
     text = metrics.prometheus()
     assert "harbortrace_reads_total 2" in text and "harbortrace_lag 1.5" in text
     assert metrics.snapshot()["timings"]["op"]["count"] == 1
+
+
+def test_timing_metrics_keep_cumulative_statistics_with_bounded_memory():
+    metrics = serving.Metrics()
+    tracing = tracemalloc.is_tracing()
+    if not tracing:
+        tracemalloc.start()
+    try:
+        for _ in range(250):
+            for seconds in (0.125, 0.25, 0.5, 1.0):
+                metrics.observe("request", seconds)
+        retained_before = tracemalloc.get_traced_memory()[0]
+        for _ in range(24_750):
+            for seconds in (0.125, 0.25, 0.5, 1.0):
+                metrics.observe("request", seconds)
+        retained_after = tracemalloc.get_traced_memory()[0]
+    finally:
+        if not tracing:
+            tracemalloc.stop()
+    # Additional observations of one metric must not retain samples. A generous
+    # allocation allowance avoids tying this check to a particular accumulator.
+    assert retained_after - retained_before < 16_384
+    metrics.observe("publish", 3.0)
+    metrics.observe("publish", 3.0)
+    assert metrics.snapshot()["timings"] == {
+        "request": {"count": 100_000, "max_seconds": 1.0, "total_seconds": 46_875.0},
+        "publish": {"count": 2, "max_seconds": 3.0, "total_seconds": 6.0},
+    }
+    exported = metrics.prometheus().splitlines()
+    assert "harbortrace_request_seconds_count 100000" in exported
+    assert "harbortrace_request_seconds_sum 46875.000000" in exported
+    assert "harbortrace_publish_seconds_count 2" in exported
+    assert "harbortrace_publish_seconds_sum 6.000000" in exported
+    metrics.timings.clear()
+    assert metrics.snapshot()["timings"] == {}
+    assert "harbortrace_request_seconds_count" not in metrics.prometheus()
+    metrics.observe("request", 0.5)
+    assert metrics.snapshot()["timings"]["request"] == {
+        "count": 1, "max_seconds": 0.5, "total_seconds": 0.5,
+    }

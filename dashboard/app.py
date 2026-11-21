@@ -28,7 +28,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlencode
 
-from harbortrace.serving import METRICS, Reader, ValidationError, VisitQuery, health
+from harbortrace.serving import METRICS, VISITS, Reader, ValidationError, VisitQuery, health, hourly_aggregates
 
 LOG = logging.getLogger("harbortrace.dashboard")
 STYLE = """
@@ -168,7 +168,7 @@ class Dashboard:
             return self._json("200 OK", self.reader.summary(query, generation_id) if generation_id
                               else {"generation": None, "by_port_status": []})
         if path == "/api/hourly":
-            return self._json("200 OK", self.reader.hourly(query.port_id, generation_id) if generation_id else [])
+            return self._json("200 OK", self._hourly(query, generation_id) if generation_id else [])
         if path == "/api/provisional":
             return self._json("200 OK", self.reader.provisional(query))
         if path == "/":
@@ -195,10 +195,10 @@ class Dashboard:
             f"<div class='card banner'><strong>{_e(label)}</strong> · generation <code>{_e(generation_id)}</code> · "
             f"run <code>{_e(generation.get('run_id'))}</code> · rule <code>{_e(generation.get('rule_version'))}</code> · "
             f"activated {_t(generation.get('activated_at'))} UTC</div>")
-        parts.append(self._form(params))
+        parts.append(self._form(params, generation_id))
         summary = self.reader.summary(query, generation_id)
         visits = self.reader.visits(query, generation_id)
-        hourly = self.reader.hourly(query.port_id, generation_id)
+        hourly = self._hourly(query, generation_id)
         parts.append(self._summary_section(summary))
         parts.append(self._hourly_section(hourly, query))
         parts.append(self._visit_section(visits))
@@ -208,12 +208,27 @@ class Dashboard:
                      f"<a href='/api/summary?{_e(links)}'>summary</a> · <a href='/healthz'>health</a></p>")
         return "".join(parts) + "</main></body></html>"
 
-    def _form(self, params: dict) -> str:
+    def _hourly(self, query: VisitQuery, generation_id: str) -> list[dict]:
+        if query.status == "candidate":
+            return []
+        if query.mmsi:
+            filter_ = {"generation_id": generation_id, **query.mongo_filter(), "status": "reconciled"}
+            rows = hourly_aggregates(self.db[VISITS].find(filter_, {
+                "port_id": 1, "status": 1, "first_inside": 1, "observed_span_seconds": 1,
+                "left_censored": 1, "right_censored": 1,
+            }))
+        else:
+            rows = self.reader.hourly(query.port_id, generation_id)
+        return [row for row in rows if (not query.start or row["hour"] >= query.start)
+                and (not query.end or row["hour"] < query.end)]
+
+    def _form(self, params: dict, generation_id: str) -> str:
         def value(name):
             return _e((params.get(name) or [""])[0])
         port_value = (params.get("port") or [""])[0]
+        ports = sorted(self.db[VISITS].distinct("port_id", {"generation_id": generation_id}))
         options = "".join(f"<option value='{_e(p)}'{' selected' if p == port_value else ''}>{_e(p)}</option>"
-                          for p in self.reader.ports())
+                          for p in ports)
         status_value = (params.get("status") or [""])[0]
         statuses = "".join(f"<option value='{s}'{' selected' if s == status_value else ''}>{s}</option>"
                            for s in ("reconciled", "candidate"))

@@ -139,3 +139,71 @@ def test_one_request_uses_one_generation(published, monkeypatch):
     _, _, body = call(app)
     gen_a = json.loads((FIXTURES / "generation_a/manifest.json").read_text())
     assert f"{gen_a['visit_count']} visits." in body
+
+
+def test_hourly_api_uses_date_status_and_vessel_filters(published):
+    app = make_app(published, token="")
+    assert json.loads(call(app, "/api/hourly", "start=2030-01-01")[2]) == []
+    assert json.loads(call(app, "/api/hourly", "status=candidate")[2]) == []
+    assert json.loads(call(app, "/api/hourly", "mmsi=000000000")[2]) == []
+    visit = next(v for v in serving.load_artifact(FIXTURES / "generation_a").visits
+                 if v["status"] == "reconciled")
+    expected = published[serving.VISITS].count_documents({"mmsi": visit["mmsi"], "status": "reconciled"})
+    rows = json.loads(call(app, "/api/hourly", f"mmsi={visit['mmsi']}")[2])
+    assert sum(row["confirmed_count"] for row in rows) == expected
+    assert all(row["port_id"] == visit["port_id"] for row in rows)
+
+
+def test_candidate_and_unknown_vessel_pages_have_no_unfiltered_chart(published):
+    app = make_app(published, token="")
+    for query in ("status=candidate", "mmsi=000000000"):
+        status, _, body = call(app, query=query)
+        assert status == 200
+        assert "No reconciled hourly aggregates" in body
+        assert "<svg" not in body
+
+
+def test_port_choices_are_pinned_to_page_generation(published, monkeypatch):
+    app = make_app(published, token="")
+    original = app.reader.active_generation
+    artifact = serving.load_artifact(FIXTURES / "generation_b")
+    switched = False
+
+    def generation_then_switch():
+        nonlocal switched
+        result = original()
+        if not switched:
+            switched = True
+            serving.publish(published, artifact, owner="test")
+            published[serving.VISITS].update_many({"generation_id": artifact.generation_id},
+                                                {"$set": {"port_id": "new-port"}})
+        return result
+
+    monkeypatch.setattr(app.reader, "active_generation", generation_then_switch)
+    _, _, body = call(app)
+    assert "value='4110'" in body and "value='4120'" in body
+    assert "new-port" not in body
+
+
+def test_many_port_summary_is_not_limited_to_displayed_visits(db, tmp_path):
+    from harbortrace.contracts import digest
+
+    base = next(v for v in serving.load_artifact(FIXTURES / "generation_a").visits
+                if v["status"] == "reconciled")
+    rows = []
+    for index in range(205):
+        row = {**base, "port_id": f"SYN{index:04d}"}
+        row["visit_id"] = digest(row["mmsi"], row["port_id"], row["first_inside"], row["rule_version"])
+        rows.append(row)
+    path = serving.write_artifact(tmp_path / "many-ports", rows, run_id="synthetic-205-ports",
+                                  rule_version=base["rule_version"], synthetic=True,
+                                  created_at="2026-11-20T00:00:00+00:00")
+    serving.publish(db, serving.load_artifact(path), owner="test")
+    app = make_app(db, token="")
+    visits = json.loads(call(app, "/api/visits")[2])
+    assert visits["total"] == 205 and len(visits["visits"]) == 200 and visits["truncated"] is True
+    summary = json.loads(call(app, "/api/summary")[2])
+    assert sum(row["visits"] for row in summary["by_port_status"]) == 205
+    assert len(summary["by_port_status"]) == 205
+    assert "value='SYN0204'" in call(app)[2]
+    assert json.loads(call(app, "/api/visits", "port=SYN0204")[2])["total"] == 1

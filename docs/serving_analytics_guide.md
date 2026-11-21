@@ -2,7 +2,10 @@
 
 Owner: Nguyen Quang Huy (20235505). Component scope from the team plan: MongoDB result storage and publication, the dashboard, Spark analytical summaries, MLlib/GraphFrames evaluation and application monitoring.
 
-This guide records what the component does, how to run it, the evidence observed so far and what is still missing. **Every result below comes from synthetic fixtures or labelled synthetic visits.** These results check application and contract behaviour only. They do not describe real vessels, and they do not pass an integration gate.
+This guide records the component behavior, runnable commands, observed evidence, and remaining work.
+The [20 November evidence](serving_evidence.md) covers the current changes, real MongoDB, actual GraphFrames execution, and a small real AIS excerpt.
+The older results retain their original dates and synthetic labels.
+The excerpt does not pass the larger real-data integration gate.
 
 ## Boundaries
 
@@ -16,7 +19,7 @@ batch artifact / active generation --> analytics (Spark) --> profiles, series, p
 |---|---|---|
 | Completed batch | Directory with `visits.jsonl` (one complete `Visit` record per line) and `manifest.json` (`artifact_type=completed_batch`, `contract_version`, `complete`, `run_id`, `rule_version`, `synthetic`, `visit_count`, `status_counts`, `visits_sha256`). Writers create the manifest last. | The artifact is fully validated before any database write. Every `Visit` field is checked, including type, UTC offset, interval order, censoring/null consistency, span arithmetic, bounded source sample, sorted flags and the recomputed `visit_id`. Hash, counts, status counts, rule version and duplicate IDs must also agree. |
 | Engine output without a manifest | Week-5 style `visits.jsonl` | `serving_import.py package` wraps the file into an artifact and records the source file's hash. |
-| Provisional update | `{contract_version, cohort_id, seq, update_id = SHA256(cohort_id, seq), mode: snapshot\|upsert\|delete, emitted_at, visits, deleted_visit_ids}` | `seq` increases strictly, and gaps are allowed. A retry of an applied `seq` with the same content does nothing. Reusing a `seq` with different content is a conflict. An unseen `seq` at or below the applied one is stale. Each applied `seq` stores the whole cohort under that `seq`, then a compare-and-set moves the cohort pointer. Readers therefore never see a mixture of two sequences. |
+| Provisional update | `{contract_version, cohort_id, seq, update_id = SHA256(cohort_id, seq), mode: snapshot\|upsert\|delete, emitted_at, visits, deleted_visit_ids}` | Sequence numbers increase, with gaps allowed. Retry identity covers mode, visit content, and deletions. Emission time describes an attempt and can change on Spark retry. Conflicting content fails. Immutable snapshot identities isolate competing attempts. A compare-and-set moves the cohort pointer. Readers pin the snapshot, and prior snapshots remain stored. |
 | Serving generation | MongoDB collections `generations`, `visits`, `aggregates`, `serving_state`, `leases`, `provisional_visits`, `provisional_cohorts`, `audit_log` | The generation ID is deterministic: `SHA256(run_id, visits_sha256)`. Document IDs are deterministic too, so retries are idempotent. Only a `complete` generation whose stored counts equal the manifest can be activated. The pointer move is a compare-and-set guarded by a lease fencing token. |
 
 The flow inside `serving.publish` is: acquire lease (fencing token N) → generation `loading` → upsert visits and hourly aggregates → verify stored counts → check token → mark `complete` → move the `active` pointer, but only if no newer token has set it → release lease. A crash at any step leaves the previous generation active. Recovery is one of two actions: rerun the same import, which resumes idempotently, or run `recover`, which marks abandoned `loading` generations `failed`.
@@ -31,6 +34,8 @@ The dashboard looks up the active generation **once per request** and passes tha
 | `src/harbortrace/analytics.py` | Spark analytics, the synthetic visit generator, MLlib with a usable-sample gate, the port-transition graph |
 | `dashboard/app.py` | Read-only WSGI dashboard and JSON/health/metrics endpoints (no extra dependencies) |
 | `scripts/serving_import.py` | Result-import runner: `import`, `package`, `apply-updates`, `status`, `activate`, `rollback`, `recover`, `demo` |
+| `src/harbortrace/update_import.py` | Complete engine directories, stable batch snapshots, semantic checksums, and durable receipts |
+| `scripts/serving_evidence.py` | Disposable MongoDB import, HTTP reconciliation, query measurements, access responses, and alerts |
 | `scripts/serve_dashboard.py` | Dashboard server |
 | `scripts/analytics_run.py` | Analytics runner (writes ignored outputs under `data/analytics/`) |
 | `scripts/make_serving_fixtures.py` | Rebuilds or checks `tests/fixtures/serving/` (synthetic) |
@@ -90,6 +95,20 @@ Apply the provisional update fixture:
 PYTHONPATH=src python scripts/serving_import.py --database harbortrace_dev apply-updates tests/fixtures/serving/provisional_updates.json
 ```
 
+Apply the engine's complete update directories to the selected database:
+
+```bash
+PYTHONPATH=src python scripts/serving_import.py --database harbortrace_dev \
+  apply-directory data/stream/huy-weeks07-15 --source-id huy-weeks07-15
+```
+
+The command accepts the engine output root or its `updates/` directory.
+It stops at an unfinished batch and records completed batch receipts in MongoDB.
+Keep the source identity stable across restarts or directory moves.
+Conflicts fail with exit code 2 and leave the failed batch without a receipt.
+Earlier cohort updates can remain committed before a failure.
+Old snapshots remain stored for pinned readers and require deliberate maintenance.
+
 Check status and health:
 
 ```bash
@@ -122,7 +141,11 @@ PYTHONPATH=src python scripts/serving_import.py package data/week05/<run>/visits
 PYTHONPATH=src python scripts/serving_import.py --database harbortrace_dev import data/serving/artifacts/week05-fixture
 ```
 
-GraphFrames is optional. When its package can be downloaded, add `--packages graphframes:graphframes:0.8.4-spark3.5-s_2.12 --repositories https://repos.spark-packages.org` to `analytics_run.py`. Without it, the graph section reports DataFrame-computed degrees and transitions and says that PageRank was not run.
+GraphFrames is optional.
+The measured run used `graphframes-py==0.12.3` with `--packages io.graphframes:graphframes-spark3_2.12:0.12.3`.
+Install the Python package in the active environment before that command.
+The [official installation guide](https://graphframes.io/02-quick-start/01-installation.html) describes the matching Spark and Scala packages.
+Without the package and JAR, the output reports DataFrame transitions and explains that GraphFrames did not run.
 
 ## Observed results so far (2 November 2026, synthetic input)
 
@@ -166,13 +189,13 @@ The custom aggregates run inside the JVM. An earlier pandas grouped-aggregate UD
 | Plan item | Status |
 |---|---|
 | Week 6: complete fixtures and isolated MongoDB import/query with schema validation | Executed on MongoDB 8.0.17 with synthetic inputs on 15 November 2026. All 12 integration tests passed. See the [week-6 evidence](week06_serving.md). |
-| Week 7–8: dashboard filters/uncertainty, activation, replacement, retries, and stale updates | Component tests use `mongomock`. The real-server suite also exercises publication, interrupted imports, retries, and all seven provisional fixture steps. Deployed dashboard evidence remains separate. |
-| Week 9 gate: import actual engine output and reconcile dashboard counts | The path works with the published week-5 output. The gate needs Khai's real-data artifacts and a joint count reconciliation. |
+| Week 7–8: dashboard filters/uncertainty, activation, replacement, retries, and stale updates | Local component work is exercised by dashboard tests and real MongoDB concurrency tests. See the [current evidence](serving_evidence.md). |
+| Week 9 gate: import actual engine output and reconcile dashboard counts | A Spark batch from the two-observation real excerpt matches MongoDB, summary, and HTTP counts. Larger real artifacts and joint reconciliation remain outstanding. |
 | Week 10: versioned remote connections | The URI, database and token are parameters. A deployed MongoDB and dashboard depend on Vu's environment. |
-| Week 11: MLlib with real inputs, GraphFrames, time-series interpretation | The code and the gate are ready. Real evaluation is blocked until the coverage audit supplies qualifying data. GraphFrames needs the package on the team machine. |
-| Week 12: query measurements, alerts, deployed read consistency | Local timings and alerts exist. Measurements on deployed infrastructure are still required. |
-| Week 13: crash, fencing and sink-retry tests, access checks, application recovery | Simulated in-process (crash after N visits, stale token, retries, rollback, recover). Repeat these against the deployed MongoDB, including a killed process and a database restart. |
-| Week 14–15: report sections, evidence index, presentation | Not written. Use the measured results from the gates, not these fixture numbers. |
-| Prototype `streaming.py` database-write logic | `streaming.py` is not in the published repository. Once Khai publishes the stream engine, it should emit the provisional-update contract above instead of writing to MongoDB. |
+| Week 11: MLlib with real inputs, GraphFrames, time-series interpretation | MLlib and actual GraphFrames run on synthetic inputs. Real model interpretation requires qualifying real samples. |
+| Week 12: query measurements, alerts, deployed read consistency | Disposable local measurements, real HTTP alerts, and bounded timing storage are tested. Deployed measurements remain outstanding. |
+| Week 13: crash, fencing and sink-retry tests, access checks, application recovery | Real MongoDB tests cover racing writers and an actually killed publisher process. Database restart, restricted accounts, and deployed recovery remain outstanding. |
+| Week 14–15: report sections, evidence index, presentation | [Report contribution](serving_report.md), [evidence](serving_evidence.md), and [presentation source](serving_presentation.md) are supplied. Team assembly, review, and defense remain joint activities. |
+| Engine boundary | The published engine emits artifacts and update directories. The serving adapter imports them without a Spark dependency. |
 
 Ownership note: per the team plan, `contracts.py`, `config.py`, `visits.py` and `spark_core.py` belong to other owners and were not modified. This component only reads them. The code here was produced with AI assistance (Claude Code) at the owner's request. Disclose that according to course policy. The owner remains responsible for reviewing and explaining it.

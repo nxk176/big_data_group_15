@@ -8,6 +8,9 @@ import copy
 import json
 import os
 import shutil
+import subprocess
+import sys
+import time
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -143,7 +146,9 @@ def test_provisional_fixture_sequence_on_real_server(db):
     assert outcomes == ["applied", "duplicate_ignored", "applied", "conflict", "applied", "stale", "applied"]
     assert visible["total"] == 1
     assert visible["cohorts"][0]["seq"] == 5
-    assert db[serving.PROVISIONAL].count_documents({}) == 1
+    active = db[serving.COHORTS].find_one({"_id": visible["cohorts"][0]["cohort_id"]})
+    assert db[serving.PROVISIONAL].count_documents({"snapshot_id": active["snapshot_id"]}) == 1
+    assert db[serving.PROVISIONAL].count_documents({}) > 1  # retain old snapshots for pinned readers
 
 
 @pytest.mark.parametrize("damage, message", [
@@ -166,3 +171,82 @@ def test_invalid_update_leaves_real_database_unchanged(db, damage, message):
         serving.apply_update(db, update)
     after = {name: list(db[name].find().sort("_id", 1)) for name in db.list_collection_names()}
     assert after == before
+
+
+@pytest.mark.parametrize("with_updates", [False, True])
+def test_evidence_runner_uses_disposable_database(db, tmp_path, with_updates):
+    root = FIXTURES.parents[2]
+    output = tmp_path / "evidence.json"
+    environment = {**os.environ, "HARBORTRACE_MONGO_URI": URI,
+                   "PYTHONPATH": str(root / "src") + os.pathsep + str(root)}
+    arguments = [sys.executable, str(root / "scripts/serving_evidence.py"),
+                 "--artifact", str(FIXTURES / "generation_a"),
+                 "--samples", "2", "--output", str(output)]
+    if with_updates:
+        directory = tmp_path / "updates/batch=00000000"
+        directory.mkdir(parents=True)
+        update = json.loads((FIXTURES / "provisional_updates.json").read_text())["steps"][0]["update"]
+        (directory / "part-00000.txt").write_text(json.dumps(update) + "\n")
+        (directory / "_SUCCESS").touch()
+        arguments.extend(["--updates", str(tmp_path / "updates")])
+    result = subprocess.run(arguments,
+                            env=environment, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(output.read_text())
+    assert report["input"]["synthetic"] is True
+    assert report["counts"] == {"manifest": 12, "stored": 12, "summary": 12, "http": 12}
+    assert report["retry_reused"] is True
+    assert report["http_statuses"]["unauthorized"] == 401
+    assert report["http_statuses"]["health_count_mismatch"] == 503
+    assert report["database_removed"] is True
+    assert report["database"] not in db.client.list_database_names()
+    assert report["query_timings_ms"]["visits"]["samples"] == 2
+    if with_updates:
+        assert report["updates"]["batches_applied"] == 1
+        assert report["updates_retry"]["batches_reused"] == 1
+        assert report["provisional_visits"] == 2
+
+
+def test_killed_publisher_preserves_active_generation_and_retry(db, tmp_path):
+    a = serving.load_artifact(FIXTURES / "generation_a")
+    b = serving.load_artifact(FIXTURES / "generation_b")
+    serving.publish(db, a, owner="parent")
+    marker = tmp_path / "visits-written"
+    child_code = '''
+import os
+import time
+from pathlib import Path
+from harbortrace import serving
+db = serving.connect(os.environ['HARBORTRACE_TEST_MONGO_URI'], os.environ['TEST_DATABASE'])
+original = serving._bulk_upsert
+def pause_after_visits(collection, documents, batch_size=1000):
+    original(collection, documents, batch_size)
+    if collection.name == serving.VISITS:
+        Path(os.environ['TEST_MARKER']).touch()
+        time.sleep(60)
+serving._bulk_upsert = pause_after_visits
+serving.publish(db, serving.load_artifact(os.environ['TEST_ARTIFACT']), owner='killed-publisher')
+'''
+    environment = {**os.environ, "HARBORTRACE_TEST_MONGO_URI": URI,
+                   "PYTHONPATH": str(FIXTURES.parents[2] / "src"), "TEST_DATABASE": db.name,
+                   "TEST_MARKER": str(marker), "TEST_ARTIFACT": str(FIXTURES / "generation_b")}
+    process = subprocess.Popen([sys.executable, "-c", child_code], env=environment,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 15
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists(), process.communicate(timeout=2)[1].decode() if process.poll() is not None else "publisher did not write visits"
+        process.kill()
+        process.wait(timeout=5)
+        assert serving.Reader(db).active_generation()["_id"] == a.generation_id
+        assert serving.Reader(db).visits(serving.VisitQuery())["total"] == 12
+        assert db[serving.GENERATIONS].find_one({"_id": b.generation_id})["status"] == "loading"
+        # A restarted owner resumes deterministic rows after actual process termination.
+        serving.publish(db, b, owner="killed-publisher")
+        assert serving.Reader(db).active_generation()["_id"] == b.generation_id
+        assert db[serving.VISITS].count_documents({"generation_id": b.generation_id}) == 11
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=5)

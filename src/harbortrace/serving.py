@@ -60,6 +60,10 @@ class ConflictError(ValueError):
     """The same retry identity was reused for different content."""
 
 
+class ConcurrentUpdateError(RuntimeError):
+    """The cohort changed while staging; retry this still-newer update from its new base."""
+
+
 class FencedError(RuntimeError):
     """A publisher holding an outdated lease token attempted a write."""
 
@@ -167,6 +171,8 @@ def visit_errors(doc: dict) -> list[str]:
 
 def normalize_visit(doc: dict) -> dict:
     """Validate a visit and return a canonical JSON-compatible copy (lists, not tuples)."""
+    if not isinstance(doc, dict):
+        raise ValidationError("visit: expected an object")
     errors = visit_errors(doc)
     if errors:
         raise ValidationError(f"visit {doc.get('visit_id', '?')}: " + "; ".join(errors))
@@ -291,18 +297,28 @@ def hourly_aggregates(visits: Iterable[dict]) -> list[dict]:
 
 # --------------------------------------------------------------------------- metrics
 
+@dataclass(slots=True)
+class _TimingSummary:
+    count: int = 0
+    max_seconds: float = 0.0
+    total_seconds: float = 0.0
+
+
 @dataclass
 class Metrics:
     """In-process application metrics, exported as JSON lines and in Prometheus text format."""
     counters: Counter = field(default_factory=Counter)
-    timings: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    timings: dict[str, _TimingSummary] = field(default_factory=lambda: defaultdict(_TimingSummary))
     gauges: dict[str, float] = field(default_factory=dict)
 
     def incr(self, name: str, value: int = 1):
         self.counters[name] += value
 
     def observe(self, name: str, seconds: float):
-        self.timings[name].append(seconds)
+        summary = self.timings[name]
+        summary.max_seconds = max(summary.max_seconds, seconds) if summary.count else seconds
+        summary.count += 1
+        summary.total_seconds += seconds
 
     def gauge(self, name: str, value: float):
         self.gauges[name] = value
@@ -324,8 +340,9 @@ class Metrics:
         return {
             "counters": dict(sorted(self.counters.items())),
             "gauges": dict(sorted(self.gauges.items())),
-            "timings": {name: {"count": len(v), "max_seconds": max(v), "total_seconds": sum(v)}
-                        for name, v in sorted(self.timings.items()) if v},
+            "timings": {name: {"count": v.count, "max_seconds": v.max_seconds,
+                               "total_seconds": v.total_seconds}
+                        for name, v in sorted(self.timings.items()) if v.count},
         }
 
     def prometheus(self) -> str:
@@ -334,9 +351,9 @@ class Metrics:
             lines.append(f"harbortrace_{name}_total {value}")
         for name, value in sorted(self.gauges.items()):
             lines.append(f"harbortrace_{name} {value}")
-        for name, values in sorted(self.timings.items()):
-            lines.append(f"harbortrace_{name}_seconds_count {len(values)}")
-            lines.append(f"harbortrace_{name}_seconds_sum {sum(values):.6f}")
+        for name, summary in sorted(self.timings.items()):
+            lines.append(f"harbortrace_{name}_seconds_count {summary.count}")
+            lines.append(f"harbortrace_{name}_seconds_sum {summary.total_seconds:.6f}")
         return "\n".join(lines) + "\n"
 
 
@@ -388,9 +405,10 @@ def release_lease(db, owner: str, token: int, *, name: str = "publisher"):
 
 def check_fence(db, token: int, *, name: str = "publisher"):
     current = db[LEASES].find_one({"_id": name})
-    if current is None or current["token"] != token:
+    if (current is None or current["token"] != token
+            or parse_utc(current["expires_at"], "expires_at") <= utc_now()):
         METRICS.incr("fenced_writes")
-        raise FencedError(f"fencing token {token} is not the current lease token "
+        raise FencedError(f"fencing token {token} is expired or is not the current lease token "
                           f"{None if current is None else current['token']}")
 
 
@@ -401,6 +419,7 @@ def ensure_indexes(db):
     db[VISITS].create_index([("generation_id", 1), ("mmsi", 1)])
     db[AGGREGATES].create_index([("generation_id", 1), ("port_id", 1), ("hour", 1)])
     db[PROVISIONAL].create_index([("cohort_id", 1), ("seq", 1)])
+    db[PROVISIONAL].create_index([("cohort_id", 1), ("snapshot_id", 1), ("first_inside", 1)])
 
 
 def _bulk_upsert(collection, documents: list[dict], batch_size: int = 1000):
@@ -430,14 +449,26 @@ def publish(db, artifact: BatchArtifact, *, owner: str, activate: bool = True,
         release_lease(db, owner, token)
         return result
     aggregates = hourly_aggregates(artifact.visits)
-    db[GENERATIONS].replace_one({"_id": generation_id}, {
+    loading = {
         "_id": generation_id, "status": "loading", "run_id": artifact.manifest["run_id"],
         "rule_version": artifact.manifest["rule_version"], "contract_version": CONTRACT_VERSION,
         "synthetic": artifact.manifest["synthetic"], "visits_sha256": artifact.manifest["visits_sha256"],
         "expected_visit_count": len(artifact.visits), "expected_aggregate_count": len(aggregates),
         "status_counts": artifact.manifest["status_counts"], "source": artifact.manifest.get("source", {}),
         "started_at": _iso(now or utc_now()), "fence_token": token,
-    }, upsert=True)
+    }
+    check_fence(db, token)
+    # A publisher can pause after reading an absent/loading generation. Its
+    # eventual write must not downgrade a completed generation or a newer claim.
+    from pymongo.errors import DuplicateKeyError
+    try:
+        db[GENERATIONS].replace_one({
+            "_id": generation_id, "status": {"$ne": "complete"},
+            "$or": [{"fence_token": {"$lte": token}}, {"fence_token": {"$exists": False}}],
+        }, loading, upsert=True)
+    except DuplicateKeyError as error:
+        METRICS.incr("fenced_writes")
+        raise FencedError(f"generation {generation_id} completed or was claimed by a newer publisher") from error
     audit(db, "generation_loading", generation_id=generation_id, owner=owner, token=token)
     documents = [{"_id": f"{generation_id}:{v['visit_id']}", "generation_id": generation_id, **v}
                  for v in artifact.visits]
@@ -457,9 +488,14 @@ def publish(db, artifact: BatchArtifact, *, owner: str, activate: bool = True,
         raise ValidationError(f"stored counts {stored_visits}/{stored_aggregates} differ from "
                               f"expected {len(artifact.visits)}/{len(aggregates)}")
     check_fence(db, token)
-    db[GENERATIONS].update_one({"_id": generation_id, "status": "loading"},
-                               {"$set": {"status": "complete", "completed_at": _iso(utc_now()),
-                                         "visit_count": stored_visits, "aggregate_count": stored_aggregates}})
+    completed = db[GENERATIONS].update_one(
+        {"_id": generation_id, "status": "loading", "fence_token": token},
+        {"$set": {"status": "complete", "completed_at": _iso(utc_now()),
+                  "visit_count": stored_visits, "aggregate_count": stored_aggregates}},
+    )
+    if completed.matched_count != 1:
+        METRICS.incr("fenced_writes")
+        raise FencedError(f"generation {generation_id} changed before completion")
     audit(db, "generation_complete", generation_id=generation_id, visits=stored_visits)
     METRICS.incr("generations_published")
     METRICS.incr("visits_imported", stored_visits)
@@ -536,7 +572,8 @@ def drop_generation(db, generation_id: str):
 # --------------------------------------------------------------------------- provisional updates
 
 def update_payload_digest(update: dict) -> str:
-    return digest(update["mode"], sorted((v["visit_id"] for v in update.get("visits", []))),
+    """Hash business content; emitted_at is attempt metadata regenerated by Spark retries."""
+    return digest(update["mode"], sorted(v["visit_id"] for v in update.get("visits", [])),
                   [visits_jsonl(update.get("visits", [])).decode()], sorted(update.get("deleted_visit_ids", [])))
 
 
@@ -548,11 +585,15 @@ def validate_update(update: dict) -> dict:
     ``SHA256(cohort_id, seq)`` and is the retry identity. ``snapshot`` replaces the cohort,
     ``upsert`` replaces/adds the listed visits, ``delete`` removes the listed visit IDs.
     """
+    if not isinstance(update, dict):
+        raise ValidationError("update: expected an object")
     for key in ("contract_version", "cohort_id", "seq", "update_id", "mode", "emitted_at"):
         if key not in update:
             raise ValidationError(f"update: missing {key}")
     if update["contract_version"] != CONTRACT_VERSION:
         raise ValidationError("update: unsupported contract_version")
+    if not isinstance(update["cohort_id"], str) or not update["cohort_id"].strip():
+        raise ValidationError("update: cohort_id must be a non-empty string")
     if update["mode"] not in UPDATE_MODES:
         raise ValidationError(f"update: mode must be one of {UPDATE_MODES}")
     if not isinstance(update["seq"], int) or isinstance(update["seq"], bool) or update["seq"] < 1:
@@ -560,8 +601,15 @@ def validate_update(update: dict) -> dict:
     if update["update_id"] != digest(update["cohort_id"], update["seq"]):
         raise ValidationError("update: update_id must equal SHA256(cohort_id, seq)")
     parse_utc(update["emitted_at"], "emitted_at")
+    for name in ("visits", "deleted_visit_ids"):
+        if not isinstance(update.get(name, []), (list, tuple)):
+            raise ValidationError(f"update: {name} must be a list")
     visits = [normalize_visit(v) for v in update.get("visits", [])]
     deleted = list(update.get("deleted_visit_ids", []))
+    if any(not isinstance(value, str) or not HEX64.fullmatch(value) for value in deleted):
+        raise ValidationError("update: deleted_visit_ids must contain lowercase SHA-256 hex digests")
+    if len(set(deleted)) != len(deleted):
+        raise ValidationError("update: duplicate deleted_visit_ids")
     if update["mode"] == "delete" and (visits or not deleted):
         raise ValidationError("update: delete mode lists deleted_visit_ids only")
     if update["mode"] != "delete" and deleted:
@@ -571,16 +619,16 @@ def validate_update(update: dict) -> dict:
     return {**update, "visits": visits, "deleted_visit_ids": deleted}
 
 
-def apply_update(db, update: dict) -> dict:
-    """Apply one provisional update; retries are no-ops, stale or conflicting updates are rejected.
+def _cohort_snapshot_filter(cohort: dict) -> dict:
+    """Select a pinned snapshot, including cohorts written before snapshot IDs existed."""
+    return {"cohort_id": cohort["_id"], "seq": cohort["seq"],
+            "snapshot_id": cohort.get("snapshot_id", {"$exists": False})}
 
-    Each applied sequence materializes the full cohort under ``seq`` and then moves the
-    cohort pointer, so a reader sees either the old or the new cohort, never a mixture.
-    """
-    update = validate_update(update)
+
+def _existing_update_result(cohort: dict | None, update: dict, payload: str) -> dict | None:
+    if cohort is None:
+        return None
     cohort_id, seq = update["cohort_id"], update["seq"]
-    payload = update_payload_digest(update)
-    cohort = db[COHORTS].find_one({"_id": cohort_id}) or {"_id": cohort_id, "seq": 0, "applied": {}}
     applied = cohort.get("applied", {})
     if str(seq) in applied:
         if applied[str(seq)] != payload:
@@ -591,8 +639,27 @@ def apply_update(db, update: dict) -> dict:
     if seq <= cohort["seq"]:
         METRICS.incr("provisional_stale_rejected")
         raise StaleUpdateError(f"{cohort_id} seq {seq} is not newer than applied seq {cohort['seq']}")
+    return None
+
+
+def apply_update(db, update: dict) -> dict:
+    """Apply one provisional update; retries are no-ops, stale or conflicting updates are rejected.
+
+    Each update stages deterministic immutable rows under its own snapshot identity,
+    then compares and swaps the cohort pointer. Prior and abandoned snapshots are
+    retained: deleting them during publication would invalidate pinned readers.
+    """
+    update = validate_update(update)
+    cohort_id, seq = update["cohort_id"], update["seq"]
+    payload = update_payload_digest(update)
+    previous = db[COHORTS].find_one({"_id": cohort_id})
+    result = _existing_update_result(previous, update, payload)
+    if result:
+        return result
+    cohort = previous or {"_id": cohort_id, "seq": 0, "applied": {}}
+    applied = cohort.get("applied", {})
     current = {doc["visit_id"]: doc for doc in
-               db[PROVISIONAL].find({"cohort_id": cohort_id, "seq": cohort["seq"]}, {"_id": 0})}
+               db[PROVISIONAL].find(_cohort_snapshot_filter(cohort), {"_id": 0})}
     if update["mode"] == "snapshot":
         state = {v["visit_id"]: v for v in update["visits"]}
     elif update["mode"] == "upsert":
@@ -601,22 +668,37 @@ def apply_update(db, update: dict) -> dict:
     else:
         state = {key: {k: doc[k] for k in VISIT_FIELDS} for key, doc in current.items()
                  if key not in set(update["deleted_visit_ids"])}
-    documents = [{"_id": f"{cohort_id}:{seq}:{key}", "cohort_id": cohort_id, "seq": seq,
+    base = cohort.get("snapshot_id", ["legacy", cohort["seq"]])
+    snapshot_id = digest("provisional-snapshot", cohort_id, seq, base, payload, update["emitted_at"])
+    documents = [{"_id": f"{snapshot_id}:{key}", "cohort_id": cohort_id, "seq": seq,
+                  "snapshot_id": snapshot_id,
                   "emitted_at": update["emitted_at"], **visit} for key, visit in sorted(state.items())]
     _bulk_upsert(db[PROVISIONAL], documents)
-    # Compare-and-set on the previous sequence: a concurrent writer cannot interleave.
+    # Attempt timestamps identify staged rows, but are excluded from retry content.
+    # Identical snapshot IDs imply identical base, content and metadata, so retries
+    # only write identical rows. Competing payloads and bases never share row IDs.
     applied = dict(list(applied.items())[-50:])  # bounded retry memory
     applied[str(seq)] = payload
-    new_state = {"_id": cohort_id, "seq": seq, "applied": applied, "updated_at": _iso(utc_now()),
+    new_state = {"_id": cohort_id, "seq": seq, "snapshot_id": snapshot_id,
+                 "applied": applied, "updated_at": _iso(utc_now()),
                  "emitted_at": update["emitted_at"], "visit_count": len(documents)}
-    if cohort["seq"] == 0 and db[COHORTS].find_one({"_id": cohort_id}) is None:
-        db[COHORTS].insert_one(new_state)
+    if previous is None:
+        from pymongo.errors import DuplicateKeyError
+        try:
+            db[COHORTS].insert_one(new_state)
+            committed = True
+        except DuplicateKeyError:
+            committed = False
     else:
-        outcome = db[COHORTS].replace_one({"_id": cohort_id, "seq": cohort["seq"]}, new_state)
-        if outcome.matched_count == 0:
-            db[PROVISIONAL].delete_many({"cohort_id": cohort_id, "seq": seq})
-            raise StaleUpdateError(f"{cohort_id} advanced concurrently; seq {seq} discarded")
-    db[PROVISIONAL].delete_many({"cohort_id": cohort_id, "seq": {"$lt": seq}})
+        pointer_filter = {"_id": cohort_id, "seq": cohort["seq"],
+                          "snapshot_id": cohort.get("snapshot_id", {"$exists": False})}
+        committed = db[COHORTS].replace_one(pointer_filter, new_state).matched_count == 1
+    if not committed:
+        result = _existing_update_result(db[COHORTS].find_one({"_id": cohort_id}), update, payload)
+        if result:
+            return result
+        METRICS.incr("provisional_concurrent_retries")
+        raise ConcurrentUpdateError(f"{cohort_id} advanced concurrently; retry seq {seq} from the new snapshot")
     METRICS.incr("provisional_updates_applied")
     lag = (utc_now() - parse_utc(update["emitted_at"], "emitted_at")).total_seconds()
     METRICS.gauge("provisional_last_lag_seconds", max(lag, 0.0))
@@ -719,7 +801,7 @@ class Reader:
         cohorts = list(self.db[COHORTS].find({}, {"applied": 0}))
         rows: list[dict] = []
         for cohort in cohorts:
-            filter_ = {"cohort_id": cohort["_id"], "seq": cohort["seq"], **query.mongo_filter()}
+            filter_ = {**_cohort_snapshot_filter(cohort), **query.mongo_filter()}
             rows.extend(self.db[PROVISIONAL].find(filter_, {"_id": 0}))
         rows.sort(key=lambda row: (row["first_inside"], row["mmsi"], row["port_id"]))
         return {"cohorts": [{"cohort_id": c["_id"], "seq": c["seq"], "emitted_at": c.get("emitted_at"),
