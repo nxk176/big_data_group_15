@@ -43,8 +43,11 @@ class EngineError(RuntimeError):
 
 def engine_session(name: str, *, master: str | None = "local[2]", driver_memory: str = "2g",
                    shuffle_partitions: int = 2, ui: bool = False, warehouse: str | None = None,
-                   packages: str | None = None):
-    """Create a Spark session. ``master=None`` leaves the master to ``spark-submit``."""
+                   packages: str | None = None, conf: dict[str, str] | None = None):
+    """Create a Spark session. ``master=None`` leaves the master to ``spark-submit``.
+
+    ``conf`` holds further Spark settings (tuning experiments pass them by name).
+    """
     from pyspark.sql import SparkSession
     builder = (SparkSession.builder.appName(name)
                .config("spark.sql.shuffle.partitions", str(shuffle_partitions))
@@ -61,6 +64,8 @@ def engine_session(name: str, *, master: str | None = "local[2]", driver_memory:
         builder = builder.config("spark.sql.warehouse.dir", warehouse)
     if packages:
         builder = builder.config("spark.jars.packages", packages)
+    for key, value in (conf or {}).items():
+        builder = builder.config(key, value)
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("ERROR")
     _ship_package(spark)

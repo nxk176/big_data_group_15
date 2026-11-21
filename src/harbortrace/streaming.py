@@ -23,9 +23,18 @@ from .visits import Rules
 
 KAFKA_PACKAGE = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.7"
 STATE_DDL = "state string"
-OUTPUT_DDL = ("mmsi string, cohort_id string, seq long, visits long, update string, accepted long, "
-              "late long, duplicates long, forced long, invalid long, buffered long, expired long")
+STATE_STORES = {
+    "default": "org.apache.spark.sql.execution.streaming.state.HDFSBackedStateStoreProvider",
+    "rocksdb": "org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider",
+}
+# One row per vessel and microbatch: the update (or null) and that vessel's counters as
+# one JSON string. Two columns instead of one per counter, because building and
+# transferring a one-row frame costs time per column and happens for every vessel in
+# every microbatch.
+OUTPUT_DDL = "update string, metrics string"
 COUNTERS = ("accepted", "late", "duplicates", "forced")
+METRICS = COUNTERS + ("invalid", "buffered", "expired", "visits")
+METRICS_DDL = ", ".join(f"{name} long" for name in METRICS)
 
 
 def _vessel_function(ports: tuple[str, ...] | None, rules: Rules, stream_id: str, max_buffer: int):
@@ -59,12 +68,12 @@ def _vessel_function(ports: tuple[str, ...] | None, rules: Rules, stream_id: str
             state.update((json.dumps(vessel.export(), separators=(",", ":")),))
             wake_ms = int(vessel.wake_at().timestamp() * 1000) + 1
             state.setTimeoutTimestamp(max(wake_ms, watermark_ms + 1))
-        row = {"mmsi": mmsi, "cohort_id": vessel.cohort_id, "seq": vessel.seq if result else None,
-               "visits": len(result["visits"]) if result else 0,
-               "update": json.dumps(result, sort_keys=True, separators=(",", ":")) if result else None,
-               "invalid": invalid, "buffered": len(vessel.buffer), "expired": int(expired)}
-        row.update({name: vessel.counters[name] - before[name] for name in COUNTERS})
-        yield pd.DataFrame([row])
+        metrics = {name: vessel.counters[name] - before[name] for name in COUNTERS}
+        metrics.update(invalid=invalid, buffered=len(vessel.buffer), expired=int(expired),
+                       visits=len(result["visits"]) if result else 0)
+        yield pd.DataFrame({
+            "update": [json.dumps(result, sort_keys=True, separators=(",", ":")) if result else None],
+            "metrics": [json.dumps(metrics, separators=(",", ":"))]})
     return update
 
 
@@ -108,14 +117,18 @@ def _sink(output: str):
         from pyspark.sql import functions as F
         frame.persist()
         try:
+            # The counters come first on purpose. Their aggregation runs one task per
+            # state partition, in parallel, and fills the cache. Writing the single
+            # update file first would compute every partition inside the one task of
+            # ``coalesce(1)``, one after another (measured: one busy core out of four).
+            sums = [F.coalesce(F.sum(f"metrics.{name}"), F.lit(0)).alias(name) for name in METRICS]
+            (frame.withColumn("metrics", F.from_json("metrics", METRICS_DDL))
+             .agg(F.count(F.lit(1)).alias("vessels"), F.count("update").alias("updates"), *sums)
+             .withColumn("batch_id", F.lit(batch_id)).coalesce(1)
+             .write.mode("overwrite").json(f"{output}/metrics/batch={batch_id:08d}"))
             # Overwrite by batch ID: a retried microbatch replaces its own output.
             (frame.where("update IS NOT NULL").select(F.col("update").alias("value")).coalesce(1)
              .write.mode("overwrite").text(f"{output}/updates/batch={batch_id:08d}"))
-            sums = [F.coalesce(F.sum(name), F.lit(0)).alias(name)
-                    for name in COUNTERS + ("invalid", "buffered", "expired", "visits")]
-            (frame.agg(F.count(F.lit(1)).alias("vessels"), F.count("update").alias("updates"), *sums)
-             .withColumn("batch_id", F.lit(batch_id)).coalesce(1)
-             .write.mode("overwrite").json(f"{output}/metrics/batch={batch_id:08d}"))
         finally:
             frame.unpersist()
     return write
@@ -143,7 +156,10 @@ def stream_report(query) -> dict:
         return {"batches": len(query.recentProgress)}
     last = progress[-1]
     operator = last["stateOperators"][0]
+    seconds = [item["durationMs"].get("triggerExecution", 0) / 1000 for item in query.recentProgress
+               if item["numInputRows"]]
     return {"batches": last["batchId"] + 1, "watermark": last.get("eventTime", {}).get("watermark"),
+            "batch_seconds_total": round(sum(seconds), 1), "batch_seconds_max": round(max(seconds, default=0), 1),
             "input_rows": sum(item["numInputRows"] for item in query.recentProgress),
             "state_rows": operator["numRowsTotal"], "state_memory_bytes": operator["memoryUsedBytes"],
             "rows_dropped_by_watermark": sum(item["stateOperators"][0]["numRowsDroppedByWatermark"]

@@ -8,7 +8,8 @@ import pytest
 
 from harbortrace.contracts import Observation
 from harbortrace.replay import replay_messages
-from harbortrace.stream_state import ResumableSha256, StreamMachine, VesselStream, visit_json
+from harbortrace.stream_state import (OpenSslSha256, PythonSha256, ResumableSha256, StreamMachine,
+                                      VesselStream, visit_json)
 from harbortrace.visits import Rules, reconstruct
 
 PORTS = ("P1", "P2")
@@ -53,15 +54,43 @@ def apply(view: dict, update: dict | None) -> None:
         view.update({visit["visit_id"]: visit for visit in update["visits"]})
 
 
-def test_resumable_sha256_matches_hashlib_across_saved_states():
+def sha256_implementations():
+    return [PythonSha256] + ([OpenSslSha256] if ResumableSha256 is OpenSslSha256 else [])
+
+
+@pytest.mark.parametrize("implementation", sha256_implementations())
+def test_resumable_sha256_matches_hashlib_across_saved_states(implementation):
     rng = random.Random(7)
     for _ in range(40):
         parts = [rng.randbytes(rng.choice([0, 1, 55, 56, 63, 64, 65, 200])) for _ in range(rng.randint(0, 9))]
-        resumable = ResumableSha256()
+        resumable = implementation()
         for part in parts:
             resumable.update(part)
-            resumable = ResumableSha256.restore(json.loads(json.dumps(resumable.export())))
+            assert resumable.hexdigest() == resumable.hexdigest()  # reading the digest changes nothing
+            resumable = implementation.restore(json.loads(json.dumps(resumable.export())))
         assert resumable.hexdigest() == hashlib.sha256(b"".join(parts)).hexdigest()
+
+
+def test_sha256_state_moves_between_implementations():
+    """A state saved on a machine with OpenSSL must restore on one without it, and back."""
+    implementations = sha256_implementations()
+    rng = random.Random(11)
+    for _ in range(40):
+        parts = [rng.randbytes(rng.choice([0, 1, 55, 56, 63, 64, 65, 200])) for _ in range(rng.randint(1, 9))]
+        resumable = implementations[0]()
+        for index, part in enumerate(parts):
+            resumable.update(part)
+            resumable = implementations[(index + 1) % len(implementations)].restore(resumable.export())
+        assert resumable.hexdigest() == hashlib.sha256(b"".join(parts)).hexdigest()
+
+
+def test_preview_leaves_the_open_visit_untouched():
+    machine = StreamMachine("990000001", "P1", RULES)
+    for observation in vessel_observations("990000001", seed=5)[:40]:
+        machine.feed(Observation.from_json(observation))
+        before = json.dumps(machine.export(), sort_keys=True)
+        machine.preview()
+        assert json.dumps(machine.export(), sort_keys=True) == before
 
 
 def test_every_released_prefix_equals_batch_reconstruction():
