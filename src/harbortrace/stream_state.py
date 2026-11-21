@@ -15,6 +15,9 @@ of the observations released so far; visits are only added or replaced, never re
 from __future__ import annotations
 
 import copy
+import ctypes
+import ctypes.util
+import hashlib
 import math
 import struct
 from datetime import datetime, timedelta
@@ -24,8 +27,12 @@ from .visits import Rules, VesselTracker, VisitMachine
 
 # --------------------------------------------------------------------------- resumable SHA-256
 # ``source_digest`` is a SHA-256 over every source record ID of a visit. A hashlib object
-# cannot be saved into a state store, so the streaming path uses this implementation, whose
-# state is eight integers and a short tail. It yields the same digests as hashlib.
+# cannot be saved into a state store, so the streaming path uses a SHA-256 whose state
+# (eight integers, a length and a short tail) can be exported. Two implementations yield
+# the same digests as hashlib and read each other's exported state: one calls the
+# compression function of the system's OpenSSL, the other is plain Python and is used
+# where OpenSSL cannot be loaded. The plain one took about 40% of the stream's Python
+# time on real data, which is why the OpenSSL one is preferred.
 
 _MASK = 0xFFFFFFFF
 
@@ -63,7 +70,7 @@ def _compress(state: tuple, block: bytes) -> tuple:
     return tuple((x + y) & _MASK for x, y in zip(state, (a, b, c, d, e, f, g, h)))
 
 
-class ResumableSha256:
+class PythonSha256:
     """SHA-256 with an exportable state (same ``update``/``hexdigest`` as hashlib)."""
 
     def __init__(self, words: tuple = _INITIAL, length: int = 0, tail: bytes = b""):
@@ -88,8 +95,69 @@ class ResumableSha256:
         return [list(self.words), self.length, self.tail.hex()]
 
     @classmethod
-    def restore(cls, data: list) -> "ResumableSha256":
+    def restore(cls, data: list) -> "PythonSha256":
         return cls(tuple(data[0]), data[1], bytes.fromhex(data[2]))
+
+
+class _Context(ctypes.Structure):
+    """OpenSSL's ``SHA256_CTX``: chaining words, bit length, pending block, pending size."""
+    _fields_ = [("h", ctypes.c_uint32 * 8), ("low", ctypes.c_uint32), ("high", ctypes.c_uint32),
+                ("data", ctypes.c_ubyte * 64), ("pending", ctypes.c_uint), ("digest_size", ctypes.c_uint)]
+
+
+class OpenSslSha256:
+    """The same interface and exported state as ``PythonSha256``, computed by OpenSSL."""
+    library = None
+
+    def __init__(self, words: tuple = _INITIAL, length: int = 0, tail: bytes = b""):
+        self.context = _Context()
+        self.context.h[:] = words
+        self.context.low, self.context.high = (length * 8) & _MASK, (length * 8) >> 32
+        self.context.data[:len(tail)] = tail
+        self.context.pending, self.context.digest_size = len(tail), 32
+
+    def update(self, data: bytes) -> None:
+        self.library.SHA256_Update(ctypes.byref(self.context), data, len(data))
+
+    def hexdigest(self) -> str:
+        scratch, output = _Context.from_buffer_copy(self.context), ctypes.create_string_buffer(32)
+        self.library.SHA256_Final(output, ctypes.byref(scratch))
+        return output.raw.hex()
+
+    def export(self) -> list:
+        context = self.context
+        length = ((context.high << 32) | context.low) // 8
+        return [list(context.h), length, bytes(context.data[:context.pending]).hex()]
+
+    @classmethod
+    def restore(cls, data: list) -> "OpenSslSha256":
+        return cls(tuple(data[0]), data[1], bytes.fromhex(data[2]))
+
+    def __deepcopy__(self, memo) -> "OpenSslSha256":
+        return self.restore(self.export())
+
+
+def _load_openssl() -> bool:
+    """Load libcrypto and accept it only if a split, exported and restored digest is right."""
+    try:
+        name = ctypes.util.find_library("crypto")
+        library = ctypes.CDLL(name) if name else None
+        if library is None:
+            return False
+        library.SHA256_Update.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+        library.SHA256_Final.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
+        OpenSslSha256.library = library
+        sample = bytes(range(256)) * 3
+        first = OpenSslSha256()
+        first.update(sample[:100])
+        second = OpenSslSha256.restore(first.export())
+        second.update(sample[100:])
+        return second.hexdigest() == hashlib.sha256(sample).hexdigest()
+    except (OSError, AttributeError):
+        return False
+
+
+ResumableSha256 = OpenSslSha256 if _load_openssl() else PythonSha256
 
 
 # --------------------------------------------------------------------------- saveable machine
@@ -126,7 +194,9 @@ class StreamMachine(VisitMachine):
 
     def preview(self) -> Visit | None:
         """The open visit as the batch engine would report it if input ended here."""
-        return copy.deepcopy(self).close()[0] if self.first_inside is not None else None
+        # A shallow copy is enough: closing reads the visit fields and the digest without
+        # changing them, then rebinds the copy's own attributes.
+        return copy.copy(self).close()[0] if self.first_inside is not None else None
 
 
 # --------------------------------------------------------------------------- vessel state

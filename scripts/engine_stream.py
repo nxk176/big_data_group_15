@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,8 @@ from pathlib import Path
 from harbortrace.contracts import Observation
 from harbortrace.engine import engine_session
 from harbortrace.stream_state import visit_json
-from harbortrace.streaming import KAFKA_PACKAGE, read_metrics, read_updates, start_stream, stream_report
+from harbortrace.streaming import (KAFKA_PACKAGE, STATE_STORES, read_metrics, read_updates, start_stream,
+                                   stream_report)
 from harbortrace.visits import Rules, reconstruct
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,7 +80,16 @@ def main() -> None:
     parser.add_argument("--partitions", type=int, default=2)
     parser.add_argument("--driver-memory", default="2g")
     parser.add_argument("--spark-ui", action="store_true")
+    parser.add_argument("--state-store", choices=sorted(STATE_STORES), default="default",
+                        help="Where Spark keeps vessel state; fixed by the first run on an output directory")
+    parser.add_argument("--conf", action="append", default=[], metavar="KEY=VALUE", help="Extra Spark setting")
     args = parser.parse_args()
+    conf = {"spark.sql.streaming.stateStore.providerClass": STATE_STORES[args.state_store]}
+    for item in args.conf:
+        key, separator, value = item.partition("=")
+        if not separator:
+            parser.error(f"--conf expects KEY=VALUE, got {item!r}")
+        conf[key] = value
     if args.fixture:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         output = ROOT / "data/stream" / f"fixture-{stamp}"
@@ -93,7 +104,8 @@ def main() -> None:
         ports = None if args.ports == ["all"] else args.ports
     spark = engine_session("harbortrace-engine-stream", master=None if args.master == "submit" else args.master,
                            driver_memory=args.driver_memory, shuffle_partitions=args.partitions, ui=args.spark_ui,
-                           packages=KAFKA_PACKAGE if source.startswith("kafka:") else None)
+                           packages=KAFKA_PACKAGE if source.startswith("kafka:") else None, conf=conf)
+    started = time.perf_counter()
     try:
         query = start_stream(spark, source, output, ports=ports, stream_id=stream_id,
                              lateness_minutes=args.lateness_minutes, max_buffer=args.max_buffer,
@@ -103,8 +115,13 @@ def main() -> None:
         if query.exception():
             raise RuntimeError(str(query.exception()))
         report = stream_report(query)
+        report["wall_seconds"] = round(time.perf_counter() - started, 1)
     finally:
         spark.stop()
+    checkpoint = Path(output) / "checkpoint"
+    if checkpoint.is_dir():  # absent when the output is on HDFS
+        report["checkpoint_bytes"] = sum(path.stat().st_size for path in checkpoint.rglob("*") if path.is_file())
+    report.update(state_store=args.state_store, master=args.master, partitions=args.partitions)
     metrics = read_metrics(output)
     totals = {name: sum(row[name] for row in metrics)
               for name in ("accepted", "duplicates", "late", "forced", "invalid", "updates", "expired")}
@@ -133,6 +150,9 @@ def main() -> None:
           f"peak buffered observations in one microbatch: {report['peak_buffered']}; "
           f"dropped by watermark: {report.get('rows_dropped_by_watermark')}")
     print(f"Provisional visits: {len(view)}")
+    print(f"Time: {report.get('wall_seconds')} s for the query, {report.get('batch_seconds_total')} s inside "
+          f"microbatches (slowest {report.get('batch_seconds_max')} s); state store: {args.state_store}; "
+          f"checkpoint: {report.get('checkpoint_bytes')} bytes")
     if "comparison_with_batch" in report:
         print(f"Compared with batch artifact: {report['comparison_with_batch']}")
     print(f"Output: {output}")

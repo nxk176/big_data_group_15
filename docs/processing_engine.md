@@ -49,7 +49,7 @@ Consequences:
 | `src/harbortrace/stream_state.py` | Pure per-vessel streaming state: buffer, saveable machines, update construction |
 | `src/harbortrace/streaming.py` | Structured Streaming query, Kafka/file sources, per-batch sink, progress report |
 | `scripts/engine_batch.py`, `scripts/engine_stream.py` | Runners |
-| `scripts/engine_experiments.py` | Replay preparation, late-arrival experiment, kill-and-restart experiment |
+| `scripts/engine_experiments.py` | Replay preparation, late-arrival experiment, kill-and-restart experiment, streaming settings comparison (`tune`), vessel skew and partition count (`skew`) |
 | `tests/unit/test_engine.py`, `test_stream_state.py`, `test_streaming.py`, `test_tracker.py` | Component checks |
 | `src/harbortrace/visits.py` | Reference state machine (week 4, unchanged) plus `VesselTracker`, which keeps machines only for ports with an open visit |
 | `src/harbortrace/spark_core.py` | Week 4–5 partition adapter (unchanged; the week-five script still uses it) |
@@ -79,6 +79,18 @@ PYTHONPATH=src python scripts/engine_stream.py --source data/replay/pilot-2024-0
 ```
 
 A Kafka source uses `--source kafka:<topic> --kafka-bootstrap <host:port>` and downloads the Spark Kafka connector on first use. Rerunning with the same `--output` resumes from its checkpoint. Add `--spark-ui` to keep the Spark UI on port 4040.
+
+Streaming settings: `--state-store rocksdb` keeps vessel state in RocksDB instead of the default in-memory store (fixed by the first run on an output directory), and `--conf KEY=VALUE` passes any other Spark setting, for example `--conf spark.sql.streaming.minBatchesToRetain=10` to keep fewer old state versions in the checkpoint. The report records wall time, time inside microbatches and checkpoint size.
+
+```bash
+# the same replay under several settings; fails unless every setting gives identical updates
+PYTHONPATH=src python scripts/engine_experiments.py tune --replay data/replay/all-ports-2024-01-01 --ports all \
+  --out data/experiments/tune --driver-memory 3g \
+  --variant cores4 "local[4]" 8 default --variant cores8 "local[8]" 8 default --variant rocksdb "local[8]" 8 rocksdb
+# observations per vessel and per partition, and batch time for several partition counts
+PYTHONPATH=src python scripts/engine_experiments.py skew --canonical data/wide/all-2024-01-01/canonical \
+  --ports all --partitions 4 8 16 32 --out data/experiments/skew.json
+```
 
 ## Observed results (12 November 2026, one laptop, Spark 3.5.7 `local[2]`)
 
@@ -141,6 +153,26 @@ The same day was also streamed at this scope. `engine_experiments.py replay-spar
 | Largest resident memory of one process | – | 2.1 GB |
 
 The first attempt was stopped from outside after three microbatches because the laptop ran low on memory. It was restarted with the same command and output directory, resumed from the checkpoint, and the final output has every message accepted exactly once and no repeated update identity, so this run is a second, unplanned restart test. Compared with the all-port batch artifact: 20,375 provisional visits, all with a batch `visit_id`; 12,477 identical in every field; 6,382 where batch has observations after the final watermark; 51 whose exit confirmation was not released; 1,465 that differ only in the end flag and gap; 112 batch visits that start after the watermark; none unexplained. Streaming is about 30 times slower than the batch run of the same day, mostly per-microbatch state handling; the checkpoint size comes from the default state store keeping several versions of the state.
+
+### Streaming throughput (20 November 2026, real data sample)
+
+The all-port stream above was slow for two reasons found by profiling. The running `source_digest` was a pure-Python SHA-256 whose state was copied for every update; it now uses OpenSSL through `ctypes` when available (checked against `hashlib` at import, with the pure-Python version as fallback and the exported state interchangeable between the two). The sink wrote the updates with `coalesce(1)` first, which computed every state partition inside one task; it now writes the per-partition metrics first, so the state step runs in parallel and the single-file write reads the cached result.
+
+Sample: the first 8 half-hour replay files of 1 January at all-port scope (1,208,054 messages, 9 microbatches, 53,739 updates), 3 GB driver memory, one file per microbatch.
+
+| Code and setting | Wall time | Checkpoint | State memory |
+|---|---|---|---|
+| Committed code (`4d6a580`), `local[4]`, 8 partitions | 305 s (`/usr/bin/time`, includes JVM start) | – | 64.9 MB |
+| New code, `local[1]`, 8 partitions | 197 s | 299.5 MB | 65.0 MB |
+| New code, `local[2]`, 8 partitions | 126 s | 299.5 MB | 65.0 MB |
+| New code, `local[4]`, 8 partitions | 93–97 s (two runs) | 299.5 MB | 65.0 MB |
+| New code, `local[4]`, 4 partitions | 96 s | 299.4 MB | 66.2 MB |
+| New code, `local[8]`, 8 partitions | 61–84 s (two runs) | 299.5 MB | 65.0 MB |
+| New code, `local[8]`, 16 partitions | 89 s | 299.6 MB | 69.1 MB |
+| New code, RocksDB state store, `local[4]`, 8 partitions | 99 s | 415.2 MB | 67.2 MB |
+| New code, RocksDB state store, `local[8]`, 16 partitions | 70 s | 415.6 MB | 133.8 MB |
+
+Every run gives the same 53,739 updates apart from `emitted_at` and the stream name inside `cohort_id`/`update_id`; with the same stream name the committed and the new code give byte-identical updates. At the same setting the new code is about 3.2 times faster; with 8 cores about 4–5 times. More cores help up to the 8 tested; the partition count barely matters; RocksDB is not faster here and its checkpoint is 40% larger, so the default store stays. The spread between repeated runs (61 and 84 s) comes from other load on the laptop, so differences under about 20% are not meaningful. These are sample numbers on one laptop; the 14-day all-port run has not been done yet.
 
 ### Late arrivals: what the watermark costs and what batch restores (real data)
 

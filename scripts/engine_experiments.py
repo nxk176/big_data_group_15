@@ -1,4 +1,4 @@
-"""Engine experiments on replayed data: late arrivals and a killed streaming job.
+"""Engine experiments on replayed data: late arrivals, a killed streaming job, tuning.
 
     # canonical Parquet -> ordered JSONL replay files (uses replay.replay_messages; loads the day in memory).
     # "replay-spark" does the same with Spark for inputs that do not fit in memory (no duplicate copies).
@@ -10,6 +10,14 @@
     # kill the streaming job mid-run, restart it, compare with an uninterrupted run
     PYTHONPATH=src python scripts/engine_experiments.py crash --replay data/replay/pilot-2024-01-01 \
         --ports 4120 4110 --out data/experiments/crash
+    # run the same replay under several Spark settings; every run must give the same updates
+    PYTHONPATH=src python scripts/engine_experiments.py tune --replay data/replay/all-ports-2024-01-01 \
+        --ports all --out data/experiments/tune --driver-memory 3g \
+        --variant cores1 "local[1]" 8 default --variant cores4 "local[4]" 8 default \
+        --variant rocksdb "local[4]" 8 rocksdb
+    # how unevenly vessels load the partitions of the batch engine, and what the partition count costs
+    PYTHONPATH=src python scripts/engine_experiments.py skew --canonical data/wide/all-2024-01-01/canonical \
+        --ports all --partitions 2 4 8 16 32 --out data/experiments/skew.json
 """
 from __future__ import annotations
 
@@ -83,7 +91,7 @@ def command_replay_spark(args) -> None:
                            shuffle_partitions=args.partitions)
     try:
         run_id, minutes = args.run_id, args.bucket_minutes
-        lines = read_observations(spark, [args.canonical]).rdd.mapPartitions(
+        lines = read_observations(spark, args.canonical).rdd.mapPartitions(
             lambda rows: _replay_lines(rows, run_id, minutes))
         frame = spark.createDataFrame(lines, "bucket string, value string")
         frame.repartition("bucket").sortWithinPartitions("bucket").write.partitionBy("bucket").text(str(args.out))
@@ -95,14 +103,15 @@ def command_replay_spark(args) -> None:
     print(json.dumps({"files": len(files), "bytes": sum(path.stat().st_size for path in files)}))
 
 
-def stream_command(source: Path, output: Path, ports: list[str], lateness: int) -> list[str]:
+def stream_command(source: Path, output: Path, ports: list[str], lateness: int, extra: tuple = ()) -> list[str]:
     return [sys.executable, str(ROOT / "scripts/engine_stream.py"), "--source", str(source), "--output", str(output),
             "--stream-id", "experiment", "--ports", *ports, "--lateness-minutes", str(lateness),
-            "--max-per-trigger", "1"]
+            "--max-per-trigger", "1", *extra]
 
 
-def run_stream(source: Path, output: Path, ports: list[str], lateness: int, artifact: Path | None = None) -> dict:
-    command = stream_command(source, output, ports, lateness)
+def run_stream(source: Path, output: Path, ports: list[str], lateness: int, artifact: Path | None = None,
+               extra: tuple = ()) -> dict:
+    command = stream_command(source, output, ports, lateness, extra)
     if artifact:
         command += ["--compare-artifact", str(artifact)]
     subprocess.run(command, check=True, capture_output=True, text=True)
@@ -214,9 +223,110 @@ def command_crash(args) -> None:
         raise SystemExit(1)
 
 
+def command_tune(args) -> None:
+    """Run one replay under several Spark settings and require identical updates from all."""
+    args.out.mkdir(parents=True, exist_ok=False)
+    rows, reference = [], None
+    for name, master, partitions, store in args.variant:
+        extra = ("--master", master, "--partitions", partitions, "--state-store", store,
+                 "--driver-memory", args.driver_memory, *(part for item in args.conf for part in ("--conf", item)))
+        report = run_stream(args.replay, args.out / name, args.ports, args.lateness, extra=extra)
+        updates = canonical_updates(args.out / name)
+        reference = updates if reference is None else reference
+        rows.append({"variant": name, "master": master, "partitions": int(partitions), "state_store": store,
+                     "wall_seconds": report["wall_seconds"], "batch_seconds_total": report["batch_seconds_total"],
+                     "batch_seconds_max": report["batch_seconds_max"], "microbatches": report["batches"],
+                     "accepted": report["totals"]["accepted"], "updates": len(updates),
+                     "state_memory_bytes": report["state_memory_bytes"],
+                     "checkpoint_bytes": report["checkpoint_bytes"],
+                     "updates_equal_first_variant": updates == reference})
+        print(json.dumps(rows[-1]), flush=True)
+    result = {"replay": str(args.replay), "ports": args.ports, "lateness_minutes": args.lateness,
+              "driver_memory": args.driver_memory, "conf": args.conf, "runs": rows}
+    (args.out / "tune.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    print("\nSTREAM TUNING")
+    print("variant      | master    | partitions | state store | wall s | checkpoint MB | state MB | same updates")
+    for row in rows:
+        print(f"{row['variant']:<12} | {row['master']:<9} | {row['partitions']:>10} | {row['state_store']:<11} | "
+              f"{row['wall_seconds']:>6} | {row['checkpoint_bytes'] / 1e6:>13.1f} | "
+              f"{row['state_memory_bytes'] / 1e6:>8.1f} | {row['updates_equal_first_variant']}")
+    if not all(row["updates_equal_first_variant"] for row in rows):
+        raise SystemExit("RESULT: FAIL - a setting changed the updates.")
+    print("RESULT: PASS - every setting produced the same updates.")
+
+
+def command_skew(args) -> None:
+    """Observations per vessel, rows per partition and batch time for several partition counts.
+
+    The batch engine sends all observations of a vessel to one partition, so a partition
+    cannot be smaller than its busiest vessel. This measures how far that matters.
+    """
+    from pyspark.sql import functions as F
+    from harbortrace.engine import engine_session, read_observations, reconstruct_visits
+    from harbortrace.visits import Rules
+    ports = None if args.ports == ["all"] else args.ports
+    spark = engine_session("harbortrace-skew", master=args.master, driver_memory=args.driver_memory,
+                           shuffle_partitions=max(args.partitions))
+    try:
+        observations = read_observations(spark, args.canonical)
+        per_vessel = observations.groupBy("mmsi").count().persist()
+        total, vessels, largest = per_vessel.agg(F.sum("count"), F.count(F.lit(1)), F.max("count")).first()
+        quantiles = per_vessel.approxQuantile("count", [0.5, 0.9, 0.99], 0.0)
+        top = max(1, vessels // 100)
+        top_rows = sum(row["count"] for row in per_vessel.orderBy(F.desc("count")).limit(top).collect())
+        result = {"canonical": args.canonical, "master": args.master, "observations": total, "vessels": vessels,
+                  "per_vessel": {"median": quantiles[0], "p90": quantiles[1], "p99": quantiles[2], "max": largest},
+                  "top_1_percent_vessels": top, "top_1_percent_share": round(top_rows / total, 4), "runs": []}
+        for count in args.partitions:
+            sizes = [row["count"] for row in observations.repartition(count, "mmsi")
+                     .groupBy(F.spark_partition_id().alias("partition")).count().collect()]
+            sizes += [0] * (count - len(sizes))
+            visits, _ = reconstruct_visits(spark, observations, ports, Rules(), count)
+            started = time.perf_counter()
+            visit_count = visits.count()
+            elapsed = round(time.perf_counter() - started, 1)
+            result["runs"].append({"partitions": count, "rows_min": min(sizes), "rows_max": max(sizes),
+                                   "rows_mean": round(total / count), "max_over_mean": round(max(sizes) * count / total, 3),
+                                   "largest_vessel_share_of_mean_partition": round(largest * count / total, 4),
+                                   "visits": visit_count, "reconstruction_seconds": elapsed})
+            print(json.dumps(result["runs"][-1]), flush=True)
+    finally:
+        spark.stop()
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    print("\nVESSEL SKEW")
+    print(f"{total} observations, {vessels} vessels; per vessel: {result['per_vessel']}; "
+          f"busiest 1% of vessels hold {result['top_1_percent_share']:.1%} of the observations")
+    print("partitions | rows min | rows max | max/mean | visits | reconstruction s")
+    for row in result["runs"]:
+        print(f"{row['partitions']:>10} | {row['rows_min']:>8} | {row['rows_max']:>8} | {row['max_over_mean']:>8} | "
+              f"{row['visits']:>6} | {row['reconstruction_seconds']:>16}")
+    if len({row["visits"] for row in result["runs"]}) != 1:
+        raise SystemExit("RESULT: FAIL - the partition count changed the number of visits.")
+    print("RESULT: PASS - every partition count gives the same number of visits.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
+    skew = commands.add_parser("skew")
+    skew.add_argument("--canonical", required=True, nargs="+")
+    skew.add_argument("--ports", nargs="+", required=True)
+    skew.add_argument("--partitions", type=int, nargs="+", default=[2, 4, 8, 16, 32])
+    skew.add_argument("--master", default="local[4]")
+    skew.add_argument("--driver-memory", default="3g")
+    skew.add_argument("--out", required=True, type=Path)
+    skew.set_defaults(handler=command_skew)
+    tune = commands.add_parser("tune")
+    tune.add_argument("--replay", required=True, type=Path)
+    tune.add_argument("--ports", nargs="+", required=True)
+    tune.add_argument("--out", required=True, type=Path)
+    tune.add_argument("--lateness", type=int, default=10)
+    tune.add_argument("--driver-memory", default="2g")
+    tune.add_argument("--conf", action="append", default=[], metavar="KEY=VALUE", help="Spark setting for every variant")
+    tune.add_argument("--variant", nargs=4, action="append", required=True,
+                      metavar=("NAME", "MASTER", "PARTITIONS", "STATE_STORE"))
+    tune.set_defaults(handler=command_tune)
     replay = commands.add_parser("replay")
     replay.add_argument("--canonical", required=True)
     replay.add_argument("--run-id", required=True)
@@ -225,7 +335,7 @@ def main() -> None:
     replay.add_argument("--seed", type=int, default=20261112)
     replay.set_defaults(handler=command_replay)
     replay_spark = commands.add_parser("replay-spark")
-    replay_spark.add_argument("--canonical", required=True)
+    replay_spark.add_argument("--canonical", required=True, nargs="+", help="Canonical Parquet paths, e.g. day directories")
     replay_spark.add_argument("--run-id", required=True)
     replay_spark.add_argument("--out", required=True, type=Path)
     replay_spark.add_argument("--bucket-minutes", type=int, default=30, choices=[5, 10, 15, 30])
