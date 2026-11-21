@@ -1,0 +1,5 @@
+[dependency-groups]
+test = [
+    "pytest==8.3.3",
+    "mongomock==4.3.0",
+]
