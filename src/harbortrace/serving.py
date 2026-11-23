@@ -275,6 +275,20 @@ def load_artifact(directory: Path | str) -> BatchArtifact:
     return BatchArtifact(directory, manifest, tuple(visits))
 
 
+def snapshot_visit_file(artifact: BatchArtifact, destination: Path) -> Path:
+    """Copy validated bytes to private scratch for lazy local Spark reads."""
+    source = artifact.path / artifact.manifest["visits_file"]
+    checksum = hashlib.sha256()
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        while chunk := reader.read(1024 * 1024):
+            checksum.update(chunk)
+            writer.write(chunk)
+    if checksum.hexdigest() != artifact.manifest["visits_sha256"]:
+        destination.unlink()
+        raise ValidationError("visits.jsonl SHA-256 changed between validation and snapshot")
+    return destination
+
+
 def hourly_aggregates(visits: Iterable[dict]) -> list[dict]:
     """Contract hourly aggregate: reconciled visits only, keyed by port and UTC hour of first_inside."""
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
