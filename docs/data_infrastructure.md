@@ -4,16 +4,17 @@ Owner: Do Dang Vu — 20235578. This component prepares source data, publishes c
 
 | Part | Files |
 |---|---|
-| Source preparation, quality, spatial assignment | `src/harbortrace/ingest.py`, `quality.py`, `spatial.py` (inherited week-five prototype) |
+| Source preparation, quality, spatial assignment | `src/harbortrace/ingest.py`, `quality.py`, `spatial.py` (inherited week-five prototype; `spatial.PortIndex` added) |
+| Spark preparation into day-partitioned canonical data | `src/harbortrace/spark_prepare.py` |
 | Replay identity and accounting | `src/harbortrace/replay.py` |
 | Kafka replay publisher and diagnostic consumer | `src/harbortrace/kafka_replay.py` |
 | HDFS publication and readback | `src/harbortrace/hdfs.py` |
 | Native HDFS and Kafka service scripts | `deploy/native/` |
 | Entry script | `scripts/data_storage.py` |
 | Boundary fixtures | `tests/fixtures/canonical/` |
-| Checks | `tests/unit/test_replay.py`, `tests/unit/test_hdfs.py`, `tests/unit/test_kafka_replay.py` |
+| Checks | `tests/unit/test_replay.py`, `test_hdfs.py`, `test_kafka_replay.py`, `test_spatial_index.py`, `test_spark_prepare.py` |
 
-Install with `python -m pip install -r requirements-data.txt` (the week-five preparation stack plus numpy and the `confluent-kafka` client).
+To bring up HDFS and Kafka on an empty machine, follow the [quickstart](services_quickstart.md). Install with `python -m pip install -r requirements-data.txt` (the week-five preparation stack plus numpy and the `confluent-kafka` client).
 
 ## Week 6: boundary fixtures and verified HDFS readback
 
@@ -158,5 +159,69 @@ The real publish took 3.4 s of sending (about 69,000 messages/s) and 6.1 s for t
 - One broker without replication, authentication or encryption. Broker loss, replica recovery and access control belong to the deployment weeks.
 - Only the two-port day was replayed. The all-port day (about 7.3 million messages) needs bounded-memory replay generation first.
 - The consumer verifies retained offsets and identities; it does not measure end-to-end latency or a live-rate source.
+
+## Week of 19 November: Spark preparation and day-partitioned HDFS storage
+
+### Port assignment without the per-row loop
+
+`spatial.assign` tests one point against every port polygon. With every usable polygon of the USACE layer that is 368 tests per position. `spatial.PortIndex` assigns a whole batch: an STRtree gives bounding-box candidates, then `shapely.covers` with prepared polygons and a vectorized boundary distance give membership and flags. It returns exactly what `assign` returns point by point: the same GEOS predicate and distance, and the same scalar latitude scaling for the near-boundary flag. Passing the predicate to `STRtree.query` was tried first; it prepares the points rather than the polygons and was slower than the scalar loop for the two large Los Angeles/Long Beach polygons.
+
+`spatial.load_usable_ports` loads every polygon that passes the existing repair rule and lists the rejected ones: on the current layer 368 are usable and 2 are rejected (2331 and 2373, repair changes the area by more than 15%). A symmetric self-intersecting polygon has zero signed area; it used to raise `ZeroDivisionError` and is now rejected with a reason.
+
+| Check (real layer, 1 January points) | Points | Result | Vectorized | Per-point `assign` |
+|---|---:|---|---:|---:|
+| Two ports | 20,060 | identical | 0.20 s | 0.47 s |
+| All 368 usable ports | 21,141 | identical | 0.20 s | 33.9 s |
+
+### Spark preparation
+
+```bash
+PYTHONPATH=src python scripts/data_storage.py spark-prepare                       # synthetic source, compared with ingest.prepare
+PYTHONPATH=src python scripts/data_storage.py spark-prepare --source data/source/ais-2024-01-*.parquet \
+    --ports 4120 4110 --output hdfs://127.0.0.1:9000/harbortrace/canonical/<name> --replication 2
+```
+
+`spark_prepare.prepare_spark` applies the rules of `ingest.prepare` with the same identities. Spark reads the source files with their name and row index (`_metadata.file_name`, `_metadata.row_index`, which equal the PyArrow row ordinal), passes every row through `quality.canonicalize` inside `mapInArrow` batches, assigns ports with `PortIndex` (named ports, or `--ports all`), and resolves same-vessel/same-time groups with window functions: identical positions keep their first `(source_file, source_row)`, differing positions reject the whole group. The file is part of the comparison because row indexes repeat across files; with the row index alone, the same observation at the same row of two files was kept twice (fixed 23 November, covered by a unit test). The output is
+
+```text
+<output>/day=YYYY-MM-DD/part-*.parquet   canonical observations, sorted by mmsi and event time
+<output>/_quarantine/part-*.json         rejected rows: source file and row, reason, kept file and row for duplicates
+<output>/_manifest.json                  sources with SHA-256, boundary hash, ports used/rejected, row accounting, rows per day
+```
+
+Spark and the processing engine skip the `_` paths, so the directory reads as canonical Parquet (the engine selects the contract columns and ignores `day`). The directory is written under a hidden partial name and renamed only after the manifest exists; an existing output is never overwritten. `compare_with_reference` compares an output row for row with an `ingest.prepare` canonical file and its quarantine. For an `hdfs://` output, `--replication` sets the replication factor (default: the cluster's `dfs.replication`) and the command adds an `hdfs fsck` block report.
+
+**Defect found and fixed: memory.** The first fifteen-day all-port run failed after 6.7 hours with `OutOfMemoryError` in Spark's `MemoryStore`: `persist()` held the 106 million prepared rows and the window result as objects in an 8 GB local heap. One day had fitted. The prepared rows and the duplicate/conflict resolution are now written to a staging directory beside the output (`.<name>.staging`) and read back, so later passes stream from files and sorts spill to disk; the staging directory is removed before publication. The rerun took 21 minutes.
+
+**Defect found and fixed: replication.** The first HDFS run with `--replication 2` produced files with replication 3. Spark's Hadoop client defaults to 3 regardless of the cluster setting, and a `FileSystem` cached before the setting keeps the old value. The setting is now applied before the output filesystem is opened, every written file gets `setReplication` before publication, and the command waits until the NameNode reports no under-replicated block.
+
+### Two local DataNodes and block reports
+
+`HARBORTRACE_DATANODES=2 bash deploy/native/hdfs-start.sh` starts a second DataNode on the same host with its own configuration, storage directory, ports (+10) and Hadoop PID directory; `hdfs-stop.sh` stops every recorded DataNode. `hdfs.block_report` parses `hdfs fsck <path> -files -blocks -locations` into health status, blocks, live replicas, replicas per DataNode and under-replicated/missing/corrupt counts. Both DataNodes share one disk and one machine: this exercises replication and placement, not protection against losing a machine.
+
+### Observed results, 16 November 2026
+
+macOS 26.5 (Apple silicon, 10 cores, 32 GB), Spark 3.5.7 `local[*]`, Hadoop 3.5.0 with two local DataNodes. Real NOAA AIS days of January 2024.
+
+| Run | Source rows | Canonical rows | Rejected / outside | Time | Check |
+|---|---:|---:|---|---:|---|
+| 1 January, two ports, local | 7,293,408 | 235,713 | 7 duplicates / 7,057,688 | 26.5 s (`local[10]`) | **Equal** to `ingest.prepare` row for row, quarantine and accounting (about 268 s single-process) |
+| 1 January, two ports, HDFS, replication 2 | 7,293,408 | 235,713 | same | | Equal; 3 blocks, each on both DataNodes, HEALTHY |
+| 1 January, all 368 usable ports, local | 7,293,408 | 7,270,776 | 215 duplicates, 86 conflicts / 22,331 | 122 s | 20,000 sampled rows: assignment equal to `assign` |
+| 1–15 January, two ports, HDFS, replication 2 | 106,206,861 | 3,499,987 | 231 duplicates, 126 conflicts / 102,706,517 | 290 s | 15 day partitions; 17 blocks, each on both DataNodes, HEALTHY |
+| 1–15 January, all 368 usable ports, HDFS, replication 2 | 106,206,861 | 105,953,905 | 3,036 duplicates, 530 conflicts / 249,390 | 1,273 s | 15 day partitions of 5.7–7.4 million rows; 15.6 GB (31.3 GB with replicas); 135 blocks, each on both DataNodes, HEALTHY |
+
+The fifteen-day all-port preparation was repeated on 23 November after the duplicate fix above, to a local directory (1,246 s): every count is identical, so these daily files hold no observation at the same row of two files. All-port day 1: 14,733 vessels, 204 ports with observations, 62% of canonical positions inside a port polygon, 1.1 GB of Parquet. An earlier unpublished all-port experiment reported 7,293,107 canonical rows; it differed only by not applying the region filter (7,293,408 − 7,293,107 = 301 = 215 duplicates + 86 conflicts). This preparation keeps the reference rule, a 0.35° margin around the selected polygons, which drops 22,331 positions far from every port.
+
+**Engine on HDFS.** `engine_batch.py` read the fourteen partitions `day=2024-01-02` … `day=2024-01-15` straight from HDFS: 3,264,274 observations, the same input size as the engine guide's core run, and 5,081 visits (3,869 reconciled, 1,212 candidate), the counts that guide reports. The `visits.jsonl` SHA-256 (`53dc5618…`) is identical when the same partitions are copied out of HDFS and read locally, and both runs took about 231 s on `local[4]`, so reading from HDFS did not change the result or the time.
+
+**Early replica-loss check.** With the fifteen-day two-port dataset at replication 2, the second DataNode was killed (`kill -9`). Spark still read all 3,499,987 rows with 3,499,987 distinct identities from the remaining replicas. The NameNode marked the node dead after 10 min 36 s (its default heartbeat expiry). After restarting the node, both DataNodes were live again within seconds, every block had two replicas and `fsck` reported HEALTHY. **Unexplained:** while the node was marked dead, `fsck` still counted its replicas as live and reported no under-replicated block. This has to be understood before the replica-loss tests of the deployment weeks; two DataNodes on one host may be the cause.
+
+### Limitations
+
+- Two DataNodes on one laptop share the disk and machine; real placement across workers, rack awareness and machine loss need the cloud deployment.
+- The single-process reference cannot run all 368 ports on a whole day in reasonable time (about 34 s per 21,000 points), so the all-port output is checked by sampled assignments and accounting, not row for row.
+- `replay-files` still loads one day into memory; all-port replay generation is the remaining bounded-memory item.
+- The all-port scope is a team decision that has not been taken; these runs measure its cost.
 
 Development used Claude Code assistance; the owner reviewed and ran every command above.

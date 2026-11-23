@@ -5,6 +5,7 @@
   replay-files   turn prepared canonical Parquet into event-time-windowed replay JSONL files
   kafka-publish  send replay JSONL to a Kafka topic, then read it back with the diagnostic consumer
   kafka-verify   re-run the diagnostic consumer against an earlier publish report
+  spark-prepare  prepare source days with Spark into day-partitioned canonical data (local or HDFS)
 """
 from __future__ import annotations
 
@@ -18,11 +19,12 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from harbortrace.contracts import CONTRACT_VERSION, Observation
-from harbortrace.hdfs import Hdfs, publish_file
+from harbortrace.hdfs import Hdfs, block_report, publish_file
 from harbortrace.ingest import atomic_json, prepare, sha256_file
 from harbortrace.kafka_replay import ensure_topic, kafka_clients, publish, replay_files, retained_messages, verify
 from harbortrace.replay import account, replay_messages
 from harbortrace.spark_core import spark_session
+from harbortrace.spark_prepare import compare_with_reference, prepare_spark
 from week04_checkpoint import print_table
 from week05_ingestion import FIXTURE, configuration, write_fixture
 
@@ -237,6 +239,68 @@ def command_kafka_verify(args) -> None:
         raise SystemExit(1)
 
 
+def wait_for_replication(hdfs: Hdfs, path: str, timeout: float = 120) -> dict:
+    """The NameNode copies blocks after a replication change in the background; wait for it."""
+    import time
+    deadline = time.monotonic() + timeout
+    while True:
+        report = block_report(hdfs, path)
+        if not report["under_replicated"] or time.monotonic() > deadline:
+            return report
+        time.sleep(3)
+
+
+def command_spark_prepare(args) -> None:
+    from harbortrace.engine import engine_session
+    run = new_run("spark-prepare")
+    fixture = not args.source
+    if fixture:
+        spec = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        sources, boundaries = write_fixture(run, spec)
+        sources, ports = [sources], ["9001"]
+        reference = prepare(configuration(run, ports), source=sources[0], boundaries=boundaries)
+    else:
+        sources, boundaries = args.source, args.boundaries
+        ports = None if args.ports == ["all"] else args.ports
+        reference = json.loads(args.compare.read_text(encoding="utf-8")) if args.compare else None
+    output = args.output or str(run / "spark-canonical")
+    if output.startswith("hdfs://") and args.replication is None:
+        args.replication = int(Hdfs.from_environment().configured("dfs.replication"))
+    spark = engine_session("harbortrace-spark-prepare", master=args.master, driver_memory=args.driver_memory,
+                           shuffle_partitions=args.partitions)
+    try:
+        manifest = prepare_spark(spark, sources, boundaries, output, ports=ports,
+                                 replication=args.replication, kind="synthetic" if fixture else "real")
+        readback = spark.read.parquet(output).count()
+        comparison = compare_with_reference(spark, output, reference) if reference else None
+    finally:
+        spark.stop()
+    blocks = wait_for_replication(Hdfs.from_environment(), output) if output.startswith("hdfs://") else None
+    report = {"manifest": manifest, "spark_readback_rows": readback, "comparison": comparison, "blocks": blocks}
+    atomic_json(run / "spark-prepare.json", report)
+    accounting = manifest["row_accounting"]
+    print("\nHARBORTRACE - SPARK PREPARATION")
+    print_table("ROW ACCOUNTING", ["Category", "Rows"],
+                [[key, accounting[key]] for key in ("source_rows", "canonical_rows", "invalid", "duplicate_rows",
+                                                    "conflict_rows", "outside_region", "accounted_rows")]
+                + [["read back from output", readback]])
+    print_table("OUTPUT", ["Item", "Value"],
+                [["Ports used / rejected", f"{manifest['ports_used']} / {len(manifest['ports_rejected'])}"],
+                 ["Days", ", ".join(f"{day}: {rows}" for day, rows in manifest["days"].items())],
+                 ["Spark seconds", manifest["seconds"]], ["Output", output]])
+    if comparison:
+        print_table("COMPARED WITH THE SINGLE-PROCESS REFERENCE", ["Check", "Value"],
+                    [[key, value] for key, value in comparison.items()])
+    if blocks:
+        print_table("HDFS BLOCKS", ["Check", "Value"], [[key, value] for key, value in blocks.items()])
+    print(f"Report: {run / 'spark-prepare.json'}")
+    failed = readback != accounting["canonical_rows"] or (comparison and comparison["result"] != "EQUAL")
+    failed = failed or (blocks and (blocks["status"] != "HEALTHY" or blocks["under_replicated"]))
+    print("RESULT:", "FAIL" if failed else "PASS")
+    if failed:
+        raise SystemExit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -273,6 +337,18 @@ def main() -> None:
     check.add_argument("--bootstrap")
     check.add_argument("--timeout", type=float, default=60)
     check.set_defaults(handler=command_kafka_verify)
+    spark_prepare = commands.add_parser("spark-prepare", help="Spark preparation into day-partitioned canonical data")
+    spark_prepare.add_argument("--source", type=Path, nargs="+", help="AIS day files (default: synthetic fixture, "
+                               "compared with the single-process preparation)")
+    spark_prepare.add_argument("--boundaries", type=Path, default=ROOT / "data/boundaries/usace_ports.geojson")
+    spark_prepare.add_argument("--ports", nargs="+", default=["4120", "4110"], help="Port IDs, or 'all' usable polygons")
+    spark_prepare.add_argument("--output", help="New local path or hdfs:// URI (default: under data/storage/)")
+    spark_prepare.add_argument("--replication", type=int, help="Replication of the written HDFS files (default: the cluster's dfs.replication)")
+    spark_prepare.add_argument("--compare", type=Path, help="Manifest of an ingest.prepare run of the same source to compare with")
+    spark_prepare.add_argument("--master", default="local[*]")
+    spark_prepare.add_argument("--driver-memory", default="4g")
+    spark_prepare.add_argument("--partitions", type=int, default=16)
+    spark_prepare.set_defaults(handler=command_spark_prepare)
     args = parser.parse_args()
     args.handler(args)
 
