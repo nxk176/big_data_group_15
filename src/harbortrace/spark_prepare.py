@@ -6,7 +6,7 @@ ports come from `spatial.PortIndex`, and same-vessel/same-time groups are resolv
 with window functions. Output (local or ``hdfs://``):
 
     <output>/day=YYYY-MM-DD/part-*.parquet   canonical observations, sorted by mmsi, event_time
-    <output>/_quarantine/part-*.json         rejected rows with their reason
+    <output>/_quarantine/part-*.json         rejected rows with their reason (and the kept file/row of a duplicate)
     <output>/_manifest.json                  inputs, ports, row accounting, per-day counts
 
 Spark readers skip the ``_`` paths, so the directory reads as canonical Parquet. The
@@ -157,14 +157,17 @@ def prepare_spark(spark, sources: list[Path], boundaries: Path, output: str, *, 
         broadcast.unpersist()
     prepared = spark.read.parquet(f"{staging}/prepared")
     group = Window.partitionBy("mmsi", "event_time")
-    # One logical observation keeps its first source row; differing positions reject the whole group.
+    # One logical observation keeps its first (source file, source row); differing positions reject the
+    # whole group. The row index alone repeats across files, so it cannot identify the kept row.
     (prepared.where("status = 'region'")
      .withColumn("_low", F.min("logical_id").over(group))
      .withColumn("_high", F.max("logical_id").over(group))
-     .withColumn("_kept", F.min("source_row").over(group))
+     .withColumn("_kept", F.min(F.struct("source_file", "source_row")).over(group))
      .withColumn("_group", F.count(F.lit(1)).over(group))
      .withColumn("status", F.when(F.col("_low") != F.col("_high"), "conflict")
-                 .when(F.col("source_row") != F.col("_kept"), "duplicate").otherwise("canonical"))
+                 .when((F.col("source_file") != F.col("_kept.source_file"))
+                       | (F.col("source_row") != F.col("_kept.source_row")), "duplicate")
+                 .otherwise("canonical"))
      .drop("_low", "_high").write.parquet(f"{staging}/resolved"))
     region = spark.read.parquet(f"{staging}/resolved")
     oversized = region.where("_group > 10000").limit(1).collect()
@@ -175,13 +178,16 @@ def prepare_spark(spark, sources: list[Path], boundaries: Path, output: str, *, 
     (canonical.repartition("day").sortWithinPartitions("mmsi", "event_time", "logical_id", "source_row")
      .write.partitionBy("day").parquet(partial))
     rejected_rows = (prepared.where("status = 'invalid'").select("source_file", "source_row", "reason")
+                     .withColumn("kept_source_file", F.lit(None).cast("string"))
                      .withColumn("kept_source_row", F.lit(None).cast("long"))
                      .unionByName(region.where("status = 'conflict'").select(
                          "source_file", "source_row", F.lit("same_time_position_conflict").alias("reason"),
+                         F.lit(None).cast("string").alias("kept_source_file"),
                          F.lit(None).cast("long").alias("kept_source_row")))
                      .unionByName(region.where("status = 'duplicate'").select(
                          "source_file", "source_row", F.lit("duplicate").alias("reason"),
-                         F.col("_kept").alias("kept_source_row"))))
+                         F.col("_kept.source_file").alias("kept_source_file"),
+                         F.col("_kept.source_row").alias("kept_source_row"))))
     rejected_rows.orderBy("source_file", "source_row").coalesce(1).write.json(f"{partial}/_quarantine")
     status = {row["status"]: row["count"] for row in prepared.groupBy("status").count().collect()}
     resolved = {row["status"]: row["count"] for row in region.groupBy("status").count().collect()}

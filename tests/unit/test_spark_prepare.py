@@ -59,3 +59,22 @@ def test_several_sources_split_by_day_and_output_is_immutable(spark, tmp_path):
         prepare_spark(spark, [first], boundaries, output, ports=["9001"])
     assert not (tmp_path / ".spark.partial").exists() and not (tmp_path / ".spark.staging").exists()
 
+
+
+def test_same_rows_in_two_files_are_kept_once(spark, tmp_path):
+    """Identical rows at the same row index of two files: one copy is canonical, the other a duplicate."""
+    first, boundaries = write_fixture(tmp_path / "a", SPEC)
+    second, _ = write_fixture(tmp_path / "b", SPEC)
+    copy = second.with_name("week05-fixture-copy.parquet")
+    second.rename(copy)
+    output = str(tmp_path / "spark")
+    manifest = prepare_spark(spark, [first, copy], boundaries, output, ports=["9001"], kind="synthetic")
+    accounting = manifest["row_accounting"]
+    assert (accounting["canonical_rows"], accounting["duplicate_rows"], accounting["conflict_rows"]) == (7, 9, 4)
+    assert accounting["accounted_rows"] == accounting["source_rows"] == 28
+    canonical = spark.read.parquet(output)
+    assert canonical.select("logical_id").distinct().count() == canonical.count() == 7
+    duplicates = [row.asDict() for row in spark.read.json(f"{output}/_quarantine").where("reason = 'duplicate'").collect()]
+    assert len(duplicates) == 9
+    kept = {(row["source_file"], row["source_row"]) for row in canonical.select("source_file", "source_row").collect()}
+    assert all((row["kept_source_file"], row["kept_source_row"]) in kept for row in duplicates)

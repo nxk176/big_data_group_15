@@ -181,11 +181,11 @@ PYTHONPATH=src python scripts/data_storage.py spark-prepare --source data/source
     --ports 4120 4110 --output hdfs://127.0.0.1:9000/harbortrace/canonical/<name> --replication 2
 ```
 
-`spark_prepare.prepare_spark` applies the rules of `ingest.prepare` with the same identities. Spark reads the source files with their name and row index (`_metadata.file_name`, `_metadata.row_index`, which equal the PyArrow row ordinal), passes every row through `quality.canonicalize` inside `mapInArrow` batches, assigns ports with `PortIndex` (named ports, or `--ports all`), and resolves same-vessel/same-time groups with window functions: identical positions keep their first source row, differing positions reject the whole group. The output is
+`spark_prepare.prepare_spark` applies the rules of `ingest.prepare` with the same identities. Spark reads the source files with their name and row index (`_metadata.file_name`, `_metadata.row_index`, which equal the PyArrow row ordinal), passes every row through `quality.canonicalize` inside `mapInArrow` batches, assigns ports with `PortIndex` (named ports, or `--ports all`), and resolves same-vessel/same-time groups with window functions: identical positions keep their first `(source_file, source_row)`, differing positions reject the whole group. The file is part of the comparison because row indexes repeat across files; with the row index alone, the same observation at the same row of two files was kept twice (fixed 23 November, covered by a unit test). The output is
 
 ```text
 <output>/day=YYYY-MM-DD/part-*.parquet   canonical observations, sorted by mmsi and event time
-<output>/_quarantine/part-*.json         rejected rows: source file and row, reason, kept row for duplicates
+<output>/_quarantine/part-*.json         rejected rows: source file and row, reason, kept file and row for duplicates
 <output>/_manifest.json                  sources with SHA-256, boundary hash, ports used/rejected, row accounting, rows per day
 ```
 
