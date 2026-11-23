@@ -1,0 +1,94 @@
+{
+  "input_rows": {
+    "visits": 276691,
+    "ports": 247,
+    "vessels": 17482
+  },
+  "output_signature": {
+    "rows": 276691,
+    "hash_sum": "2662396714521614128494"
+  },
+  "strategies": {
+    "merge_both": {
+      "warmup_seconds": 1.7529617501422763,
+      "trials_seconds": [
+        0.9818514590151608,
+        0.5881373749580234,
+        0.4801455410197377,
+        0.6354211668949574,
+        0.8245459590107203,
+        1.0608682921156287
+      ],
+      "median_seconds": 0.7299835629528388,
+      "sort_merge_joins": 2,
+      "broadcast_hash_joins": 0
+    },
+    "broadcast_ports": {
+      "warmup_seconds": 0.728866291930899,
+      "trials_seconds": [
+        0.4674764589872211,
+        0.4358782081399113,
+        0.3452477501705289,
+        0.2769739159848541,
+        0.27790620899759233,
+        0.2949076669756323
+      ],
+      "median_seconds": 0.3200777085730806,
+      "sort_merge_joins": 1,
+      "broadcast_hash_joins": 1
+    },
+    "broadcast_both": {
+      "warmup_seconds": 0.26038104202598333,
+      "trials_seconds": [
+        0.19483808311633766,
+        0.25092133320868015,
+        0.14666883298195899,
+        0.12710862513631582,
+        0.3166399581823498,
+        0.2201734590344131
+      ],
+      "median_seconds": 0.20750577107537538,
+      "sort_merge_joins": 0,
+      "broadcast_hash_joins": 2
+    }
+  },
+  "signatures_match": true,
+  "plans_match": true,
+  "differences_from_merge_both": {
+    "broadcast_ports": {
+      "before_only": 0,
+      "after_only": 0
+    },
+    "broadcast_both": {
+      "before_only": 0,
+      "after_only": 0
+    }
+  },
+  "valid_comparison": true,
+  "saved_output": "joined_visits",
+  "artifact": {
+    "run_id": "all-ports-2024-01-02_15",
+    "visits_sha256": "667e9316f8d4c69bd7ae2585fb16e123423a79c91e85a28f9f1c9c1a95fab41d",
+    "status_counts": {
+      "candidate": 58090,
+      "reconciled": 218601
+    },
+    "synthetic": false,
+    "rule_version": "visits-v1"
+  },
+  "execution": {
+    "completed_at": "2026-11-23T15:51:58.976868+00:00",
+    "spark_version": "3.5.7",
+    "python_version": "3.12.13",
+    "machine": "arm64",
+    "system": "Darwin",
+    "java_version": "17.0.21.1",
+    "master": "local[2]",
+    "shuffle_partitions": 8,
+    "adaptive_enabled": false,
+    "auto_broadcast_threshold_bytes": -1,
+    "rounds": 6,
+    "order": "one warm-up in declared order, then repeated permutations of the three strategies",
+    "timed_action": "collect count and sum of xxhash64 over every output column; inputs materialized before timing"
+  }
+}

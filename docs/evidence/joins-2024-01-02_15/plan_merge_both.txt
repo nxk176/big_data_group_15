@@ -1,0 +1,34 @@
+*(9) HashAggregate(keys=[], functions=[count(1), sum(cast(xxhash64(visit_id#0, mmsi#1, port_name#316, vessel_visits#340L, vessel_ports#341L, 42) as decimal(38,0)))], output=[rows#6888L, hash_sum#6890])
++- Exchange SinglePartition, ENSURE_REQUIREMENTS, [plan_id=2698]
+   +- *(8) HashAggregate(keys=[], functions=[partial_count(1), partial_sum(cast(xxhash64(visit_id#0, mmsi#1, port_name#316, vessel_visits#340L, vessel_ports#341L, 42) as decimal(38,0)))], output=[count#7066L, sum#7067, isEmpty#7068])
+      +- *(8) Project [visit_id#0, mmsi#1, port_name#316, vessel_visits#340L, vessel_ports#341L]
+         +- *(8) SortMergeJoin [mmsi#1], [mmsi#6855], Inner
+            :- *(6) Sort [mmsi#1 ASC NULLS FIRST], false, 0
+            :  +- Exchange hashpartitioning(mmsi#1, 8), ENSURE_REQUIREMENTS, [plan_id=2684]
+            :     +- *(5) Project [visit_id#0, mmsi#1, port_name#316]
+            :        +- *(5) SortMergeJoin [port_id#2], [port_id#315], Inner
+            :           :- *(2) Sort [port_id#2 ASC NULLS FIRST], false, 0
+            :           :  +- Exchange hashpartitioning(port_id#2, 8), ENSURE_REQUIREMENTS, [plan_id=2668]
+            :           :     +- *(1) Filter (isnotnull(port_id#2) AND isnotnull(mmsi#1))
+            :           :        +- InMemoryTableScan [visit_id#0, mmsi#1, port_id#2], [isnotnull(port_id#2), isnotnull(mmsi#1)]
+            :           :              +- InMemoryRelation [visit_id#0, mmsi#1, port_id#2], StorageLevel(disk, memory, deserialized, 1 replicas)
+            :           :                    +- FileScan json [visit_id#0,mmsi#1,port_id#2] Batched: false, DataFilters: [], Format: JSON, Location: InMemoryFileIndex(1 paths)[file:/<batch-artifact>/visits.jsonl], PartitionFilters: [], PushedFilters: [], ReadSchema: struct<visit_id:string,mmsi:string,port_id:string>
+            :           +- *(4) Sort [port_id#315 ASC NULLS FIRST], false, 0
+            :              +- Exchange hashpartitioning(port_id#315, 8), ENSURE_REQUIREMENTS, [plan_id=2676]
+            :                 +- *(3) Filter isnotnull(port_id#315)
+            :                    +- InMemoryTableScan [port_id#315, port_name#316], [isnotnull(port_id#315)]
+            :                          +- InMemoryRelation [port_id#315, port_name#316, boundary_source#317], StorageLevel(disk, memory, deserialized, 1 replicas)
+            :                                +- *(1) Scan ExistingRDD[port_id#315,port_name#316,boundary_source#317]
+            +- *(7) Sort [mmsi#6855 ASC NULLS FIRST], false, 0
+               +- *(7) Filter isnotnull(mmsi#6855)
+                  +- InMemoryTableScan [mmsi#6855, vessel_visits#340L, vessel_ports#341L], [isnotnull(mmsi#6855)]
+                        +- InMemoryRelation [mmsi#6855, vessel_visits#340L, vessel_ports#341L], StorageLevel(disk, memory, deserialized, 1 replicas)
+                              +- *(3) HashAggregate(keys=[mmsi#1], functions=[count(1), count(distinct port_id#2)], output=[mmsi#1, vessel_visits#340L, vessel_ports#341L])
+                                 +- Exchange hashpartitioning(mmsi#1, 8), ENSURE_REQUIREMENTS, [plan_id=88]
+                                    +- *(2) HashAggregate(keys=[mmsi#1], functions=[merge_count(1), partial_count(distinct port_id#2)], output=[mmsi#1, count#392L, count#395L])
+                                       +- *(2) HashAggregate(keys=[mmsi#1, port_id#2], functions=[merge_count(1)], output=[mmsi#1, port_id#2, count#392L])
+                                          +- Exchange hashpartitioning(mmsi#1, port_id#2, 8), ENSURE_REQUIREMENTS, [plan_id=83]
+                                             +- *(1) HashAggregate(keys=[mmsi#1, port_id#2], functions=[partial_count(1)], output=[mmsi#1, port_id#2, count#392L])
+                                                +- InMemoryTableScan [mmsi#1, port_id#2]
+                                                      +- InMemoryRelation [visit_id#0, mmsi#1, port_id#2], StorageLevel(disk, memory, deserialized, 1 replicas)
+                                                            +- FileScan json [visit_id#0,mmsi#1,port_id#2] Batched: false, DataFilters: [], Format: JSON, Location: InMemoryFileIndex(1 paths)[file:/<batch-artifact>/visits.jsonl], PartitionFilters: [], PushedFilters: [], ReadSchema: struct<visit_id:string,mmsi:string,port_id:string>
