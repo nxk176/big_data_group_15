@@ -1,0 +1,29 @@
+# Spark on Kubernetes: the driver pod uses this account to create and remove its executor pods,
+# the headless service executors use to reach it, and its configuration maps.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark
+  namespace: harbortrace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-driver
+  namespace: harbortrace
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "persistentvolumeclaims"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-driver
+  namespace: harbortrace
+subjects:
+  - {kind: ServiceAccount, name: spark, namespace: harbortrace}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spark-driver
