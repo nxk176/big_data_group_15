@@ -1,7 +1,7 @@
 """Serving runner: validate and publish batch artifacts, apply provisional updates, operate generations.
 
-Database selection: ``--mongo-uri`` (or HARBORTRACE_MONGO_URI) and ``--database``; ``--memory``
-uses an in-process mongomock database for demonstrations without a MongoDB server.
+Use HARBORTRACE_MONGO_URI for writes and HARBORTRACE_MONGO_READER_URI for status when available.
+The --mongo-uri and --database options override the environment. --memory uses in-process mongomock.
 
     PYTHONPATH=src python scripts/serving_import.py --memory demo
     PYTHONPATH=src python scripts/serving_import.py --mongo-uri mongodb://127.0.0.1:27017 \
@@ -30,10 +30,12 @@ def database(args):
     if args.memory:
         import mongomock
         return mongomock.MongoClient()[args.database]
-    uri = args.mongo_uri or os.environ.get("HARBORTRACE_MONGO_URI")
+    read_only = args.command == "status"
+    reader_uri = os.environ.get("HARBORTRACE_MONGO_READER_URI") if read_only else None
+    uri = args.mongo_uri or reader_uri or os.environ.get("HARBORTRACE_MONGO_URI")
     if not uri:
         raise SystemExit("Select --mongo-uri, HARBORTRACE_MONGO_URI or --memory explicitly")
-    return serving.connect(uri, args.database)
+    return serving.connect(uri, args.database, read_only=read_only)
 
 
 def show(value):
@@ -171,7 +173,7 @@ def cmd_demo(args, db):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mongo-uri")
-    parser.add_argument("--database", default="harbortrace_dev")
+    parser.add_argument("--database", default=os.environ.get("HARBORTRACE_DATABASE", "harbortrace_dev"))
     parser.add_argument("--memory", action="store_true", help="Use an in-process mongomock database")
     parser.add_argument("--owner", default=f"{os.environ.get('USER', 'publisher')}@{os.uname().nodename}")
     parser.add_argument("-v", "--verbose", action="store_true")

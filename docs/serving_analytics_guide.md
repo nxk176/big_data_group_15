@@ -115,10 +115,12 @@ Check status and health:
 PYTHONPATH=src python scripts/serving_import.py --database harbortrace_dev status
 ```
 
-Serve the dashboard from that database:
+For the local, unauthenticated example above, supply the loopback address explicitly. On an
+authenticated deployment, set `HARBORTRACE_MONGO_READER_URI` to the reader connection string
+and omit `--mongo-uri`.
 
 ```bash
-PYTHONPATH=src:. python scripts/serve_dashboard.py --database harbortrace_dev
+PYTHONPATH=src:. python scripts/serve_dashboard.py --mongo-uri mongodb://127.0.0.1:27017 --database harbortrace_dev
 ```
 
 Run the opt-in integration test against the server:

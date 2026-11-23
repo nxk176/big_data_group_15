@@ -77,22 +77,72 @@ set -a; source data/k3s/credentials.env; set +a
 | `harbortrace_writer` | `readWrite` on `harbortrace` | `serving_import.py` (import, apply updates): `$HARBORTRACE_MONGO_URI` |
 | `harbortrace_reader` | `read` on `harbortrace` | the dashboard; analytics reads: `$HARBORTRACE_MONGO_READER_URI` |
 
-Another user, e.g. a read-only one for analytics with its own password:
+To give an analyst a separate read account, open an interactive MongoDB shell in the pod.
 
 ```bash
-ANALYTICS_PASSWORD=$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')
-kubectl -n harbortrace exec mongodb-0 -- mongosh --quiet -u admin -p "$MONGO_ADMIN_PASSWORD" --authenticationDatabase admin \
-  --eval "db.getSiblingDB('harbortrace').createUser({user: 'analytics', pwd: '$ANALYTICS_PASSWORD', roles: [{role: 'read', db: 'harbortrace'}]})"
-# connection string: mongodb://analytics:$ANALYTICS_PASSWORD@127.0.0.1:30017/harbortrace?authSource=harbortrace
+kubectl -n harbortrace exec -it mongodb-0 -- mongosh --quiet
 ```
 
-The users are created only when the MongoDB volume is empty; deleting the namespace deletes the volumes and starts over.
+```javascript
+db.getSiblingDB("admin").auth(process.env.MONGO_INITDB_ROOT_USERNAME, process.env.MONGO_INITDB_ROOT_PASSWORD)
+const app = db.getSiblingDB(process.env.HARBORTRACE_DATABASE)
+app.createUser({user: "analytics", pwd: passwordPrompt(), roles: ["read"]})
+```
+
+MongoDB creates the initial accounts on first boot with an empty volume. On redeployment the script checks the local credential file against the existing Secret. Keep a protected copy of the credential file for that volume.
 
 **Dashboard in a browser.** On the node, `http://127.0.0.1:30050/`. From the Windows or macOS side, forward a port first (node ports are not forwarded out of WSL or the VM):
 
 ```bash
 kubectl -n harbortrace port-forward svc/dashboard 8050:8050    # then http://localhost:8050/
 ```
+
+### Check database access
+
+The writer builds indexes and publishes generations. The dashboard receives the database name and reader URI. Its pod mounts the dashboard code and dependencies, and runs without a Kubernetes service account token. A host dashboard also requires `HARBORTRACE_MONGO_READER_URI` when selecting its connection from the environment. Supply just the database name and reader URI to that process. A writer URI alone makes it exit before it opens the HTTP port.
+
+After publishing a generation, load the node connection settings from section 4 and run the access tests. They compare the deployed HTTP visit count with the active generation returned by the status CLI. They also check both database roles and exercise five operations MongoDB must refuse.
+
+```bash
+HARBORTRACE_TEST_K3S_ACCESS=1 PYTHONPATH=src:. .venv/bin/python -m pytest -q tests/integration/test_k3s_mongo_access.py
+```
+
+### Back up and restore MongoDB
+
+Select the intended cluster with `kubectl config current-context`. Pause serving imports, updates and generation changes for the duration of the dump. This single MongoDB instance has no replica-set oplog for a point-in-time dump across collections. Dashboard reads can continue.
+
+Run these commands from the checkout on a machine with Python 3 and permission to exec into `harbortrace/mongodb-0`. The Mongo image supplies the database tools. Choose a new backup directory on storage independent of the node and retain both files together.
+
+```bash
+BACKUP=/mnt/backups/harbortrace-$(date -u +%Y%m%dT%H%M%SZ)
+python3 deploy/k3s/mongo-backup.py dump "$BACKUP"
+python3 deploy/k3s/mongo-backup.py restore "$BACKUP"
+```
+
+The dump uses the read account and writes a gzip-compressed BSON archive and a mode-600 manifest in a mode-700 directory. Each collection must have the same document count, content hash and indexes immediately before and after the dump. A missing manifest identifies an incomplete backup. The archive contains application data. Store it on access-controlled, encrypted backup storage and retain the deployment credentials separately.
+
+The restore checks the archive SHA-256 before writing, then uses the destination pod's administrator to restore into a newly generated `harbortrace_restore_*` database. It prints the database name and returns success only if every collection, index definition, collection option and active generation matches the source manifest. Each document contributes canonical Extended JSON to its collection's SHA-256 in `_id` order. The live dashboard keeps its original database. For a planned switch, provision accounts scoped to the verified recovery database and configure the clients to use that database and its authentication source. [MongoDB dump options](https://www.mongodb.com/docs/database-tools/mongodump/) · [MongoDB restore options](https://www.mongodb.com/docs/database-tools/mongorestore/)
+
+#### Recovery drill on 23 November 2026
+
+A disposable single-node k3s v1.37.2+k3s1 cluster ran the checked-in MongoDB 7.0.48 and dashboard manifests. The writer imported the complete 1 January 2024 all-port batch (20,487 visits). For provisional data it imported just the first two completed engine directories, batches 0 and 1, with 6,696 updates. The restore used MongoDB Database Tools 100.20.1.
+
+| Collection | Source documents | Recovery database before restore | After restore |
+|---|---:|---:|---:|
+| visits | 20,487 | 0 | 20,487 |
+| aggregates | 2,605 | 0 | 2,605 |
+| provisional_visits | 6,755 | 0 | 6,755 |
+| provisional_cohorts | 6,696 | 0 | 6,696 |
+| audit_log | 3 | 0 | 3 |
+| leases | 2 | 0 | 2 |
+| update_imports | 2 | 0 | 2 |
+| generations | 1 | 0 | 1 |
+| serving_state | 1 | 0 | 1 |
+| **Total** | **36,552** | **0** | **36,552** |
+
+All nine content hashes and all 14 index definitions matched. The visits SHA-256 was `791ecca7ae18953c6b70442a882d10732944626c6ef789245cb7a711a151645f` in both databases. Replacing the MongoDB pod on the same PVC preserved the full source snapshot. A deliberately damaged archive failed verification before the tool contacted the cluster.
+
+The dashboard and status CLI reported 20,487 visits for generation `32f38bd3be35d5b370eda4e1`. MongoDB returned code 13 for a row update, index creation and collection creation by the reader, a writer query against `admin.system.users`, and an anonymous read. Deploying with a missing or mismatched local credential file stopped before changing the existing Secret.
 
 ## 5. Spark jobs on Kubernetes
 
@@ -207,7 +257,7 @@ No block was lost and reads continued from the surviving replicas. The NameNode 
 ## Limitations
 
 - One node: Kubernetes schedules, isolates and restarts the services, but every pod and both DataNodes share one machine. Losing the node loses the service; this is not high availability.
-- MongoDB and Kafka run one replica each, without TLS; the node ports listen on the node only. Credentials are a file on the node and a Kubernetes Secret (base64, not encrypted at rest in k3s by default).
+- MongoDB and Kafka run one replica each. Traffic uses plaintext and the NodePorts are reachable wherever routing and the node firewall allow. The node stores the credential file with mode 600. Kubernetes Secrets use base64 encoding and k3s requires explicit configuration to encrypt them at rest.
 - `hostNetwork` Spark pods are a single-node shortcut. With several nodes, HDFS would bind node addresses (or run in the cluster) and Spark pods would use the pod network.
 - The real-data runs used one day and two ports to fit the VM; the fifteen-day all-port data (106 million rows) was prepared on the laptop's local Spark, not on k3s.
 
