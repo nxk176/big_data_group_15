@@ -210,7 +210,13 @@ CANONICAL_SCHEMA = pa.schema([
 
 
 def _code_revision() -> str | None:
-    result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    # Containers (e.g. the Spark image) have no git; their launcher passes the revision instead.
+    if os.environ.get("HARBORTRACE_CODE_REVISION"):
+        return os.environ["HARBORTRACE_CODE_REVISION"]
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    except OSError:
+        return None
     return result.stdout.strip() if result.returncode == 0 else None
 
 
