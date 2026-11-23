@@ -49,8 +49,9 @@ Consequences:
 | `src/harbortrace/stream_state.py` | Pure per-vessel streaming state: buffer, saveable machines, update construction |
 | `src/harbortrace/streaming.py` | Structured Streaming query, Kafka/file sources, per-batch sink, progress report |
 | `scripts/engine_batch.py`, `scripts/engine_stream.py` | Runners |
+| `src/harbortrace/monitoring.py`, `scripts/engine_monitor.py` | Stream progress, threshold alerts and log summary, read from the files the query writes |
 | `scripts/engine_experiments.py` | Replay preparation, late-arrival experiment, kill-and-restart experiment, streaming settings comparison (`tune`), vessel skew and partition count (`skew`) |
-| `tests/unit/test_engine.py`, `test_stream_state.py`, `test_streaming.py`, `test_stream_output.py`, `test_tracker.py` | Component checks |
+| `tests/unit/test_engine.py`, `test_stream_state.py`, `test_streaming.py`, `test_stream_output.py`, `test_monitoring.py`, `test_tracker.py` | Component checks |
 | `src/harbortrace/visits.py` | Reference state machine (week 4, unchanged) plus `VesselTracker`, which keeps machines only for ports with an open visit |
 | `src/harbortrace/spark_core.py` | Week 4–5 partition adapter (unchanged; the week-five script still uses it) |
 
@@ -219,6 +220,31 @@ Streaming against batch at the final watermark (15 January 23:49:59 UTC), every 
 | Unexplained (either side) | **0** |
 
 Two problems appeared at this size. The skew command keeps the shuffle files of every partition count until it ends (about 25–30 GB each), so only the 4-partition run was kept; the others would have filled the disk. The stream runner built its report from a list of every update, which exhausted the machine twice after the last microbatch had committed. `streaming.iter_updates` now reads one microbatch directory at a time and the runner builds the provisional view from it (`test_stream_output.py` checks that the result equals the old list-based view). The comparison above was produced this way, with 3.4 GB peak memory in 6 minutes; Spark's own progress fields (state size, per-batch time) were lost with the crashed driver, so the stream time is the span between the first and last microbatch directory.
+
+## Monitoring
+
+`scripts/engine_monitor.py <stream output>` reports a streaming run from the files the query already writes, so it works beside a running query (`--follow`), after it ends, and after its driver dies:
+
+- **Progress per microbatch.** Start time from `checkpoint/offsets/<n>`, end time from `checkpoint/commits/<n>`, watermark and source offsets from the offsets file, and the engine counters (accepted, late, duplicates, invalid, buffered, updates) from `metrics/batch=<n>`. With `--kafka-bootstrap`, it also reports how many topic messages the query has not yet planned (consumer lag).
+- **Threshold alerts.** Batch slower than `batch_seconds` (120 s), late or invalid share above `late_ratio` (1%) or `invalid_ratio` (0.1%), more than `buffered` (500,000) observations in state, watermark not advancing for `watermark_stuck_batches` (5) batches with input, a planned batch not committed after `stall_seconds` (300 s, critical) and Kafka lag above `kafka_lag` (1,000,000). Each limit can be changed with `--threshold NAME=VALUE`. A single report exits with status 2 when a critical alert is active.
+- **Log aggregation.** `--logs DIR` counts WARN and ERROR lines in every `*.log` of the run and keeps the last errors. Every committed batch and every new alert is appended once to one JSON-lines event file (`--events`), which keeps the run's history in one place.
+
+`bash scripts/demo_end_to_end.sh monitor` runs it on the demo output (`monitor --follow` while the `stream` step runs). On the 1 January end-to-end run (13 microbatches through Kafka) it reported 235,713 accepted, 0 late, 1,665 updates, mean batch 2.3 s and slowest 6.1 s, and no alerts; lowering `batch_seconds` to 5 raised the expected warning for batch 0.
+
+Not covered: no push notification (the alert is a printed line, an event and an exit status), no dashboard for these figures, and no metrics from inside Spark (executor memory, shuffle) beyond the Spark UI.
+
+## Delivery guarantees (exactly-once scope)
+
+The guarantee is end-to-end **effectively once for the provisional view**: each message changes the view once, even when a microbatch, the driver or the importer is retried. It is built from three parts, not from one transactional sink.
+
+| Stage | Mechanism | What it guarantees |
+|---|---|---|
+| Source → engine | Kafka offsets (or the file-source log) of every microbatch are written to `checkpoint/offsets/<n>` before the batch runs | A retried batch reads exactly the same input range; nothing is skipped |
+| Engine state | `applyInPandasWithState` keeps per-vessel state in the checkpointed state store, versioned per batch; a retry starts from the state of the previous committed batch | Each message updates the vessel state once. A message whose `logical_id` is still in the vessel's buffer is counted as a duplicate; one at or before the vessel's processed frontier is counted as late. Neither changes the state, so replay copies and producer resends (500 in the 1 January replay) change nothing |
+| Engine → files | `foreachBatch` overwrites `metrics/batch=<n>` and then `updates/batch=<n>`; the batch counts as done only when Spark writes `checkpoint/commits/<n>` | Output is at-least-once: a batch retried before its commit is written again, with the same updates apart from `emitted_at` (tested: killed job, identical updates) |
+| Files → MongoDB | Updates are keyed by `(cohort_id, seq)`. Serving applies each key once and treats a repeat with the same content (the hash excludes `emitted_at`) as a no-op; an older `seq` is rejected as stale. The importer stores a receipt per batch directory | Applying the same batch twice changes nothing (49 batches reused in the all-ports trial) |
+
+Limits: the batch receipt hashes the whole directory, `emitted_at` included, so a batch rewritten by a Spark retry *after* it was imported is reported as a conflict instead of being skipped; the importer stops there rather than apply anything twice. Observations later than the watermark are dropped and counted (`late`), not delivered: the batch layer, which reads the complete retained input, restores them. The batch artifact itself is exactly-once by construction: one immutable directory per run, checked by SHA-256 when published.
 
 ## Not yet done
 
