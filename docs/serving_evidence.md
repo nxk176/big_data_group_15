@@ -79,7 +79,7 @@ The warnings concern deprecated version comparisons inside PySpark.
 
 The real excerpt visit file had SHA-256 `ee255fb73664e9019f92cbfdb44d0ffd9a26f8d115fbd78b14be89b82b86d3bc`.
 It retained uncertainty and source evidence from the two committed observations.
-The larger engine pilot was not present in this checkout.
+The larger engine pilot arrived after this run. Its results appear in the [all-ports trial](#real-ais-trial-for-all-ports-on-1-january-2024).
 
 ### Query measurements
 
@@ -121,6 +121,57 @@ Driver-side result collection and per-group arrays still limit large-input execu
 The small twelve-visit fixture also ran GraphFrames with two vertices and two edges.
 It produced PageRank `1.0` for each vertex and two strongly connected components.
 Its zero qualifying ports correctly prevented clustering.
+
+## Real AIS trial for all ports on 1 January 2024
+
+The trial started on 21 November 2026 in Asia/Ho_Chi_Minh.
+It used Python 3.12.13 and standalone MongoDB 8.0.17 on macOS 15.7.2 (Apple Silicon).
+MongoDB listened on `127.0.0.1:27027`. The database `harbortrace_all_ports_20240101` started empty.
+
+Khải supplied `huy-2024-01-01-all-ports.tar.gz`. The extracted files matched the archive byte for byte.
+The stream contained 49 completion markers and 323,353 update lines. Batch `00000000` contained an empty part file.
+Both imports read `data/stream/all-ports-2024-01-01` with source ID `all-ports-2024-01-01`.
+
+### Streaming import and retry
+
+| Pass | Batches applied | Batches reused | Updates applied | Update lines skipped | Elapsed (s) |
+|---|---:|---:|---:|---:|---:|
+| First | 49 | 0 | 323,353 | 0 | 350.899 |
+| Retry | 0 | 49 | 0 | 323,353 via batch receipts | 13.306 |
+
+Each receipt records a completed batch and its content hash. The retry read and validated every batch.
+It matched all 49 receipts and returned an empty `updates` map. Both passes reported zero pending batches.
+The first pass returned zero stale or duplicate updates. Neither pass raised an engine data error.
+The first pass produced 20,375 current provisional visits across 10,562 cohorts, which are groups of streaming visits.
+The cohort snapshot hash, 49 receipts, and 469,689 stored visit versions matched before and after the retry.
+
+The times cover `update_import.apply_directory` only. The local serving tests ran during part of the first pass.
+
+### Batch publication and dashboard
+
+Serving validated `data/engine/all-ports-2024-01-01` in 0.378 seconds. The visit file matched the SHA-256 hash in the manifest.
+Publication and activation took 1.046 seconds for generation `32f38bd3be35d5b370eda4e1`.
+MongoDB, the manifest, `/api/visits`, and the sum from `/api/summary` each counted 20,487 batch visits across 204 ports.
+The batch recorded 16,752 reconciled visits and 3,735 candidates.
+
+| Dashboard endpoint | Before publication | After activation |
+|---|---:|---:|
+| `/api/visits` | 0 | 20,487 |
+| `/api/provisional` | 20,375 | 20,375 |
+
+The batch contained all 20,375 provisional visit IDs and 112 additional IDs.
+The main dashboard view switched to the complete batch. The streaming view still returned all 20,375 provisional visits.
+The cohort snapshot hash and stored version count also matched before and after activation.
+Serving updates the active batch pointer and reads provisional cohorts independently.
+The trial therefore did not pass the automatic replacement criterion for provisional visits.
+
+The dashboard returned HTTP 200 and showed the real-data generation for all ports on 1 January 2024.
+`/healthz` returned HTTP 200 with status `degraded`. Each cohort's recorded emission time exceeded the 15-minute lag threshold.
+
+![HarborTrace dashboard after batch activation, with all ports selected for 1 January 2024](assets/serving-all-ports-2024-01-01.png)
+
+The `test` dependency group in `pyproject.toml` includes `mongomock==4.3.0`.
+The serving, importer, dashboard, and real MongoDB test suites returned 136 passed in 77.83 seconds.
 
 ## Reproduce the component
 
