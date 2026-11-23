@@ -22,7 +22,7 @@ from pathlib import Path
 from harbortrace.contracts import Observation
 from harbortrace.engine import engine_session
 from harbortrace.stream_state import visit_json
-from harbortrace.streaming import (KAFKA_PACKAGE, STATE_STORES, read_metrics, read_updates, start_stream,
+from harbortrace.streaming import (KAFKA_PACKAGE, STATE_STORES, iter_updates, read_metrics, start_stream,
                                    stream_report)
 from harbortrace.visits import Rules, reconstruct
 
@@ -32,10 +32,18 @@ END_FIELDS = {"quality_flags", "maximum_gap_seconds"}
 
 
 def provisional_view(output: Path) -> dict[str, dict]:
+    """The latest version of every provisional visit, applying updates in order one batch at a time."""
     view: dict[str, dict] = {}
-    for update in read_updates(output):
+    for update in iter_updates(output):
         view.update({visit["visit_id"]: visit for visit in update["visits"]})
+        for visit_id in update["deleted_visit_ids"]:
+            view.pop(visit_id, None)
     return view
+
+
+def read_artifact(directory: Path) -> dict[str, dict]:
+    with (directory / "visits.jsonl").open(encoding="utf-8") as handle:
+        return {row["visit_id"]: row for row in map(json.loads, handle)}
 
 
 def compare(view: dict[str, dict], batch: dict[str, dict], watermark: datetime) -> dict:
@@ -138,9 +146,7 @@ def main() -> None:
         if view != expected or not view:
             raise AssertionError("Provisional view differs from the reference on the released observations")
     if args.compare_artifact and watermark:
-        batch = {row["visit_id"]: row for row in
-                 map(json.loads, (args.compare_artifact / "visits.jsonl").read_text().splitlines())}
-        report["comparison_with_batch"] = compare(view, batch, watermark)
+        report["comparison_with_batch"] = compare(view, read_artifact(args.compare_artifact), watermark)
     (Path(output) / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print("\nHARBORTRACE - STREAMING ENGINE")
     print(f"Source: {source}; microbatches: {report.get('batches')}; input rows: {report.get('input_rows')}")

@@ -87,8 +87,8 @@ def _replay_lines(rows, run_id: str, minutes: int):
 def command_replay_spark(args) -> None:
     """Replay files for inputs too large for memory: Spark writes one file per arrival bucket."""
     from harbortrace.engine import engine_session, read_observations
-    spark = engine_session("harbortrace-replay-files", master=args.master, driver_memory="3g",
-                           shuffle_partitions=args.partitions)
+    spark = engine_session("harbortrace-replay-files", master=None if args.master == "submit" else args.master,
+                           driver_memory="3g", shuffle_partitions=args.partitions)
     try:
         run_id, minutes = args.run_id, args.bucket_minutes
         lines = read_observations(spark, args.canonical).rdd.mapPartitions(
@@ -339,7 +339,7 @@ def main() -> None:
     replay_spark.add_argument("--run-id", required=True)
     replay_spark.add_argument("--out", required=True, type=Path)
     replay_spark.add_argument("--bucket-minutes", type=int, default=30, choices=[5, 10, 15, 30])
-    replay_spark.add_argument("--master", default="local[4]")
+    replay_spark.add_argument("--master", default="local[4]", help="Spark master, or 'submit' to defer to spark-submit")
     replay_spark.add_argument("--partitions", type=int, default=8)
     replay_spark.set_defaults(handler=command_replay_spark)
     late = commands.add_parser("late")
