@@ -14,7 +14,7 @@ Owner: Do Dang Vu — 20235578. This component prepares source data, publishes c
 | Boundary fixtures | `tests/fixtures/canonical/` |
 | Checks | `tests/unit/test_replay.py`, `test_hdfs.py`, `test_kafka_replay.py`, `test_spatial_index.py`, `test_spark_prepare.py` |
 
-Install with `python -m pip install -r requirements-data.txt` (the week-five preparation stack plus numpy and the `confluent-kafka` client).
+To bring up HDFS and Kafka on an empty machine, follow the [quickstart](services_quickstart.md). Install with `python -m pip install -r requirements-data.txt` (the week-five preparation stack plus numpy and the `confluent-kafka` client).
 
 ## Week 6: boundary fixtures and verified HDFS readback
 
