@@ -180,6 +180,39 @@ def test_rewriting_completed_batch_remains_pending(db, tmp_path, updates, monkey
     assert serving.Reader(db).provisional(serving.VisitQuery())["total"] == 3
 
 
+def test_same_size_part_rewrite_with_unchanged_metadata_remains_pending(db, tmp_path, updates, monkeypatch):
+    directory = batch(tmp_path, "0", [updates[0]])
+    batch(tmp_path, "1", [updates[1]])
+    part = directory / "part-00000"
+    original_stat = Path.stat
+    original_read = Path.read_bytes
+    initial_stat = part.stat()
+    payload = part.read_bytes()
+    replacement = payload.replace(b"2026-11-02", b"2026-11-03", 1)
+    assert replacement != payload and len(replacement) == len(payload)
+
+    def coarse_stat(path, *args, **kwargs):
+        if path == part:
+            return initial_stat
+        return original_stat(path, *args, **kwargs)
+
+    def read_then_overwrite(path):
+        data = original_read(path)
+        if path == part and data == payload:
+            part.write_bytes(replacement)
+        return data
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "stat", coarse_stat)
+        patch.setattr(Path, "read_bytes", read_then_overwrite)
+        result = update_import.apply_directory(db, tmp_path, source_id="coarse-clock")
+
+    assert result["pending_batches"] == [0, 1]
+    assert db[serving.COHORTS].count_documents({}) == 0
+    assert db[update_import.RECEIPTS].count_documents({}) == 0
+    assert update_import.apply_directory(db, tmp_path, source_id="coarse-clock")["batches_applied"] == 2
+
+
 def test_spark_retry_can_rename_and_reorder_identical_update_parts(db, tmp_path, updates):
     directory = batch(tmp_path, "0", updates[:2])
     update_import.apply_directory(db, tmp_path, source_id="spark-retry")

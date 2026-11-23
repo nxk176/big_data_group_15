@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from collections import Counter
@@ -37,24 +38,28 @@ def _batches(directory: Path) -> list[tuple[int, Path]]:
     return sorted(batches.items())
 
 
-def _signature(path: Path) -> tuple:
-    state = path.stat()
-    return state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns
+def _signature(state: os.stat_result) -> tuple:
+    return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns
 
 
-def _batch_snapshot(path: Path) -> tuple:
-    marker = _signature(path / "_SUCCESS")
-    parts = tuple((part.name, _signature(part)) for part in sorted(path.glob("part-*")) if part.is_file())
-    return marker, parts
+def _part_snapshot(path: Path) -> list[tuple[Path, tuple]]:
+    return [(part, _signature(part.stat())) for part in sorted(path.glob("part-*")) if part.is_file()]
 
 
 def _load_batch(path: Path) -> tuple[list[dict], str]:
+    marker_path = path / "_SUCCESS"
     try:
-        before = _batch_snapshot(path)
-        parts = [(path / name, (path / name).read_bytes()) for name, _ in before[1]]
-        if _batch_snapshot(path) != before:
-            raise _BatchChanged(f"{path.name}: batch changed during read")
-    except FileNotFoundError as error:
+        # Keep the original inode alive so an empty replacement marker cannot reuse it.
+        with marker_path.open("rb") as marker:
+            marker_before = _signature(os.fstat(marker.fileno()))
+            before = _part_snapshot(path)
+            parts = [(part, part.read_bytes()) for part, _ in before]
+            # Coarse timestamps can hide an in-place rewrite with the same byte count.
+            if (any(part.read_bytes() != payload for part, payload in parts)
+                    or _part_snapshot(path) != before
+                    or _signature(marker_path.stat()) != marker_before):
+                raise _BatchChanged(f"{path.name}: batch changed during read")
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError) as error:
         raise _BatchChanged(f"{path.name}: batch is being rewritten") from error
     if not parts:
         raise serving.ValidationError(f"{path.name}: completed batch has no part files")
