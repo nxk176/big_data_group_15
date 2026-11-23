@@ -77,11 +77,13 @@ set -a; source data/k3s/credentials.env; set +a
 | `harbortrace_writer` | `readWrite` on `harbortrace` | `serving_import.py` (import, apply updates): `$HARBORTRACE_MONGO_URI` |
 | `harbortrace_reader` | `read` on `harbortrace` | the dashboard; analytics reads: `$HARBORTRACE_MONGO_READER_URI` |
 
-Another user, e.g. for analytics with its own password:
+Another user, e.g. a read-only one for analytics with its own password:
 
 ```bash
-kubectl -n harbortrace exec -it mongodb-0 -- mongosh -u admin -p "$MONGO_ADMIN_PASSWORD" --authenticationDatabase admin \
-  --eval 'db.getSiblingDB("harbortrace").createUser({user: "analytics", pwd: passwordPrompt(), roles: [{role: "read", db: "harbortrace"}]})'
+ANALYTICS_PASSWORD=$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')
+kubectl -n harbortrace exec mongodb-0 -- mongosh --quiet -u admin -p "$MONGO_ADMIN_PASSWORD" --authenticationDatabase admin \
+  --eval "db.getSiblingDB('harbortrace').createUser({user: 'analytics', pwd: '$ANALYTICS_PASSWORD', roles: [{role: 'read', db: 'harbortrace'}]})"
+# connection string: mongodb://analytics:$ANALYTICS_PASSWORD@127.0.0.1:30017/harbortrace?authSource=harbortrace
 ```
 
 The users are created only when the MongoDB volume is empty; deleting the namespace deletes the volumes and starts over.
