@@ -143,7 +143,7 @@ SPARK_PACKAGES=org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.7 SPARK_EXECUTOR_C
 PYTHONPATH=src .venv/bin/python scripts/serving_import.py --database $HARBORTRACE_DATABASE apply-directory data/stream/replay-2024-01-01
 ```
 
-`serving_import.py` reads `HARBORTRACE_MONGO_URI` (the writer) from the environment. `replay-files` reads a `spark-prepare` directory directly and checks its row count against `_manifest.json`; the engine team's `engine_experiments.py replay-spark` produces bucket directories directly but does not accept `--master submit` yet, so it runs with `--master local[*]` on the node.
+`serving_import.py` reads `HARBORTRACE_MONGO_URI` (the writer) from the environment. `replay-files` reads a `spark-prepare` directory directly and checks its row count against `_manifest.json`; the engine team's `engine_experiments.py replay-spark` produces bucket directories directly and accepts `--master submit`; it has not been run on k3s yet.
 
 ## Design decisions
 

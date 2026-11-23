@@ -50,7 +50,7 @@ Consequences:
 | `src/harbortrace/streaming.py` | Structured Streaming query, Kafka/file sources, per-batch sink, progress report |
 | `scripts/engine_batch.py`, `scripts/engine_stream.py` | Runners |
 | `scripts/engine_experiments.py` | Replay preparation, late-arrival experiment, kill-and-restart experiment, streaming settings comparison (`tune`), vessel skew and partition count (`skew`) |
-| `tests/unit/test_engine.py`, `test_stream_state.py`, `test_streaming.py`, `test_tracker.py` | Component checks |
+| `tests/unit/test_engine.py`, `test_stream_state.py`, `test_streaming.py`, `test_stream_output.py`, `test_tracker.py` | Component checks |
 | `src/harbortrace/visits.py` | Reference state machine (week 4, unchanged) plus `VesselTracker`, which keeps machines only for ports with an open visit |
 | `src/harbortrace/spark_core.py` | Week 4–5 partition adapter (unchanged; the week-five script still uses it) |
 
@@ -195,12 +195,37 @@ A short watermark gives a fresher view with a smaller buffer but loses late obse
 
 The all-port batch was also submitted to a temporary Spark standalone master with two worker processes (2 cores, 2 GB each) on the same laptop. The package reached the executors through `addPyFile`, and the artifact has the same SHA-256 as the `local[4]` run (70 s against 61 s). This checks the non-local code path only; it is not a multi-machine measurement.
 
+### Fourteen days, every port (22–23 November 2026, one laptop)
+
+Input: the source days 2–15 January 2024, prepared one day at a time with the data component's `spark-prepare` (branch snapshot `02b2713`, every usable port, `local[4]`, about 4.5 minutes per day). Duplicate and conflict rules compare messages of one vessel at one instant, and two UTC day files never share an instant, so per-day preparation gives the same rows as one 14-day run. The 14 days hold 98,683,129 canonical observations. Spark ran in WSL 2 with 7.8 GB of memory; outputs and Spark's shuffle directory (`SPARK_LOCAL_DIRS`) were on a separate drive.
+
+| Step | Result | Time |
+|---|---|---|
+| Two-port parity: the all-port canonical data restricted to ports 4120 and 4110 in the engine, against the published 14-day two-port artifact | Same 5,081 `visit_id` values, same observations and status for every visit. 17 visits differ only in fields that describe the observations next to the visit (`maximum_gap_seconds`, `quality_flags`, `possible_entry_after`, `possible_exit_by`, `right_censored`): the all-port data also holds the vessel's observations outside the two-port region, so the next or previous observation is now visible. | 13 min, `local[8]` |
+| Batch, every port | 276,691 visits (218,601 reconciled, 58,090 candidate) | 730 s, `local[8]`, 32 partitions |
+| Partition skew, 4 partitions | 24.10 to 25.19 million rows per partition, largest over mean 1.021; the busiest vessel holds 0.08% of a mean partition | 1,421 s |
+| Replay files (`replay-spark`) | 671 half-hour files, 63.4 GB. The half-hour 12 January 10:30–11:00 UTC has no canonical observation at all (10:00–10:30 has 7,113, against about 150,000 in a normal half-hour), so the source has a gap there | 29 min |
+| Streaming, every port, file source | 672 microbatches; 98,683,129 messages accepted, 0 duplicates, 0 late, 0 invalid; 4,619,326 updates, no `(cohort_id, seq)` repeated; 114,774 vessel states expired; at most 221,260 observations buffered in one microbatch; 276,581 provisional visits | about 1 h 46 min |
+
+Streaming against batch at the final watermark (15 January 23:49:59 UTC), every batch visit classified:
+
+| Class | Visits |
+|---|---|
+| Identical in every field | 222,628 |
+| End flag or gap only (vessel state expired while the visit was open) | 47,384 |
+| Batch has observations after the watermark | 6,506 |
+| Batch visit starts after the watermark | 110 |
+| Exit confirmation not yet released | 63 |
+| Unexplained (either side) | **0** |
+
+Two problems appeared at this size. The skew command keeps the shuffle files of every partition count until it ends (about 25–30 GB each), so only the 4-partition run was kept; the others would have filled the disk. The stream runner built its report from a list of every update, which exhausted the machine twice after the last microbatch had committed. `streaming.iter_updates` now reads one microbatch directory at a time and the runner builds the provisional view from it (`test_stream_output.py` checks that the result equals the old list-based view). The comparison above was produced this way, with 3.4 GB peak memory in 6 minutes; Spark's own progress fields (state size, per-batch time) were lost with the crashed driver, so the stream time is the span between the first and last microbatch directory.
+
 ## Not yet done
 
 - No multi-machine run. Everything above is one laptop; `hdfs://` inputs and `--master submit` are written for a cluster but unmeasured there.
 - No end-to-end run with the team's long-lived services: the Kafka test used a temporary broker, updates were applied to an in-memory database in tests, and the real MongoDB server was not used.
 - Streaming was measured on replays at full speed. Loss of one executor during a microbatch, Kafka partition skew and a live-rate source are not measured. The late-arrival and crash experiments used the file source, not Kafka.
-- No tuning study yet (partition counts, state store provider such as RocksDB, trigger interval, vessel skew). The all-port stream is the case that needs it: 31 minutes and a 1.9 GB checkpoint for one day.
+- Skew was measured for one partition count at 14-day scale; the sweep over partition counts exists only for one day. Trigger interval is not studied.
 - Updates only grow a cohort; retention of old provisional visits after a batch generation covers them is not defined.
 - The default watermark delays the provisional view by 10 minutes. No measurement yet relates this delay to real late arrivals.
 

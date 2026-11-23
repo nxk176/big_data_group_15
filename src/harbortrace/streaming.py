@@ -16,6 +16,7 @@ input again and corrects the provisional view.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -166,13 +167,20 @@ def stream_report(query) -> dict:
                                              for item in progress)}
 
 
-def read_updates(output: Path | str) -> list[dict]:
-    """Updates from a local output directory in the order they must be applied."""
-    updates = []
+def iter_updates(output: Path | str) -> Iterator[dict]:
+    """Updates from a local output directory in the order they must be applied.
+
+    Holds one microbatch in memory at a time: the 14-day all-port run wrote 4.6 million updates
+    (about 13 GB of JSON), more than the driver machine can hold as one list.
+    """
     for batch in sorted(Path(output, "updates").glob("batch=*")):
         rows = [json.loads(line) for part in sorted(batch.glob("part-*")) for line in part.open(encoding="utf-8")]
-        updates.extend(sorted(rows, key=lambda row: (row["cohort_id"], row["seq"])))
-    return updates
+        yield from sorted(rows, key=lambda row: (row["cohort_id"], row["seq"]))
+
+
+def read_updates(output: Path | str) -> list[dict]:
+    """All updates as one list (small outputs and tests); ``iter_updates`` for large ones."""
+    return list(iter_updates(output))
 
 
 def read_metrics(output: Path | str) -> list[dict]:
