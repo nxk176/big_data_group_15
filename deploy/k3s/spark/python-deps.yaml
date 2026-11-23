@@ -1,0 +1,28 @@
+# Installs the Python packages that project Spark jobs import into a node directory, once, with the
+# Spark image's own Python (3.10) so compiled wheels match. spark-python-deps.sh fills the @...@ values.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spark-python-deps
+  namespace: harbortrace
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: @UID@
+        runAsGroup: @GID@
+      containers:
+        - name: pip
+          image: "@IMAGE@"
+          command: ["python3", "-m", "pip", "install", "--no-cache-dir", "--target", "/target", "--upgrade",
+                    @PACKAGES@]
+          env:
+            - {name: HOME, value: /tmp}
+          volumeMounts:
+            - {name: target, mountPath: /target}
+      volumes:
+        - name: target
+          hostPath: {path: "@PYTHON_DEPS@", type: Directory}

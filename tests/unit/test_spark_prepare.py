@@ -78,3 +78,16 @@ def test_same_rows_in_two_files_are_kept_once(spark, tmp_path):
     assert len(duplicates) == 9
     kept = {(row["source_file"], row["source_row"]) for row in canonical.select("source_file", "source_row").collect()}
     assert all((row["kept_source_file"], row["kept_source_row"]) in kept for row in duplicates)
+
+
+def test_replay_input_reads_a_spark_prepare_directory(spark, tmp_path):
+    from data_storage import read_canonical
+    source, boundaries = write_fixture(tmp_path, SPEC)
+    reference = prepare(configuration(tmp_path, [9001]), source=source, boundaries=boundaries)
+    output = tmp_path / "spark"
+    prepare_spark(spark, [source], boundaries, str(output), ports=["9001"], kind="synthetic")
+    rows, manifest = read_canonical(output)
+    expected, _ = read_canonical(Path(reference["canonical"]))
+    key = lambda row: row["source_record_id"]  # noqa: E731
+    assert sorted(rows, key=key) == sorted(expected, key=key)
+    assert manifest["row_accounting"]["canonical_rows"] == 7

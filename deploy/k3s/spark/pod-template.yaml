@@ -1,0 +1,37 @@
+# Pod template for the Spark driver and executors (spark.kubernetes.{driver,executor}.podTemplateFile).
+# spark-submit.sh fills the @...@ values.
+#
+# - hostNetwork: the pods share the node's network, so the native HDFS (127.0.0.1:9000) and the
+#   Kafka node port (127.0.0.1:30092) have the same addresses as for programs on the node. The
+#   cluster DNS still resolves the driver's service (ClusterFirstWithHostNet).
+# - The checkout is mounted at its own path and the pods run as its owner, so paths given to the
+#   job and files it writes are the same as when it runs on the node. The driver works in the
+#   checkout, so relative paths resolve as on the node; executors work in /tmp (spark-submit.sh).
+# - Python packages the job imports (PyArrow, Shapely, ...) come from a directory that
+#   python-deps.yaml installs once for the image's Python.
+apiVersion: v1
+kind: Pod
+spec:
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  securityContext:
+    runAsUser: @UID@
+    runAsGroup: @GID@
+  containers:
+    - name: spark
+      workingDir: "@REPO@"
+      env:
+        - {name: PYTHONPATH, value: "@REPO@/src:@REPO@/scripts:/opt/harbortrace/python"}
+        - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+        - {name: HADOOP_USER_NAME, value: "@USER@"}
+        - {name: SPARK_USER, value: "@USER@"}
+        - {name: HOME, value: /tmp}
+        - {name: HARBORTRACE_CODE_REVISION, value: "@REVISION@"}
+      volumeMounts:
+        - {name: repo, mountPath: "@REPO@"}
+        - {name: python, mountPath: /opt/harbortrace/python, readOnly: true}
+  volumes:
+    - name: repo
+      hostPath: {path: "@REPO@", type: Directory}
+    - name: python
+      hostPath: {path: "@PYTHON_DEPS@", type: Directory}

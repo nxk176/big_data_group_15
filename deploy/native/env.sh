@@ -17,8 +17,10 @@ if [[ -z "${JAVA_HOME:-}" ]]; then
     JAVA_HOME=/opt/homebrew/opt/openjdk@17
   elif [[ -x /usr/local/opt/openjdk@17/bin/java ]]; then
     JAVA_HOME=/usr/local/opt/openjdk@17
-  else
-    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+  elif compgen -G "/usr/lib/jvm/java-17-openjdk-*/bin/java" >/dev/null; then
+    JAVA_HOME="$(dirname "$(dirname "$(compgen -G "/usr/lib/jvm/java-17-openjdk-*/bin/java" | head -1)")")"  # amd64 or arm64
+  elif command -v java >/dev/null 2>&1; then
+    JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
   fi
 fi
 export JAVA_HOME

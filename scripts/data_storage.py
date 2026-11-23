@@ -24,7 +24,7 @@ from harbortrace.ingest import atomic_json, prepare, sha256_file
 from harbortrace.kafka_replay import ensure_topic, kafka_clients, publish, replay_files, retained_messages, verify
 from harbortrace.replay import account, replay_messages
 from harbortrace.spark_core import spark_session
-from harbortrace.spark_prepare import compare_with_reference, prepare_spark
+from harbortrace.spark_prepare import block_placement, compare_with_reference, prepare_spark
 from week04_checkpoint import print_table
 from week05_ingestion import FIXTURE, configuration, write_fixture
 
@@ -147,16 +147,33 @@ def command_hdfs_readback(args) -> None:
     print("RESULT: PASS - bytes, SHA-256 and Spark row counts agree between local and HDFS copies.")
 
 
-def command_replay_files(args) -> None:
-    canonical = args.canonical.resolve()
-    manifest = json.loads(canonical.with_suffix(".manifest.json").read_text(encoding="utf-8"))
-    if manifest["sha256"] != sha256_file(canonical):
+def read_canonical(path: Path) -> tuple[list[dict], dict]:
+    """Rows and manifest of a prepared canonical input: an ingest.prepare Parquet file (checked
+    against its .manifest.json) or a spark-prepare directory (day=* partitions and _manifest.json,
+    e.g. copied out of HDFS with `hdfs dfs -get`)."""
+    import pyarrow.dataset as ds
+    from harbortrace.spark_prepare import CANONICAL_COLUMNS
+    path = path.resolve()
+    if path.is_dir():
+        manifest = json.loads((path / "_manifest.json").read_text(encoding="utf-8"))
+        rows = ds.dataset(path, format="parquet", partitioning="hive",
+                          exclude_invalid_files=True).to_table(columns=list(CANONICAL_COLUMNS)).to_pylist()
+        if len(rows) != manifest["row_accounting"]["canonical_rows"]:
+            raise SystemExit(f"FAIL: {len(rows)} rows read, the manifest records {manifest['row_accounting']['canonical_rows']}")
+        return rows, {"canonical": str(path), "canonical_sha256": None, "row_accounting": manifest["row_accounting"]}
+    manifest = json.loads(path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+    if manifest["sha256"] != sha256_file(path):
         raise SystemExit("FAIL: canonical Parquet differs from its preparation manifest")
+    return pq.read_table(path).to_pylist(), {"canonical": str(path), "canonical_sha256": manifest["sha256"],
+                                             "row_accounting": manifest["row_accounting"]}
+
+
+def command_replay_files(args) -> None:
+    rows, manifest = read_canonical(args.canonical)
     output = (args.output or ROOT / "data/replay" / args.run_id).resolve()
     if output.exists():
         raise SystemExit(f"FAIL: {output} exists; replay files are immutable, choose a new --output or --run-id")
-    # Holds one prepared file in memory (about 240,000 messages for the two-port day).
-    rows = pq.read_table(canonical).to_pylist()
+    # Holds the prepared input in memory (about 240,000 messages for the two-port day).
     messages = replay_messages(rows, args.run_id, args.started_at, seed=args.seed, duplicate_copies=args.duplicates)
     windows: dict[str, list[dict]] = {}
     for message in messages:
@@ -170,7 +187,8 @@ def command_replay_files(args) -> None:
         path = working / f"replay-{name}.jsonl"
         path.write_text(jsonl(rows), encoding="utf-8")
         files.append({"path": path.name, "messages": len(rows), "sha256": sha256_file(path)})
-    summary = {"contract_version": CONTRACT_VERSION, "canonical": str(canonical), "canonical_sha256": manifest["sha256"],
+    summary = {"contract_version": CONTRACT_VERSION, "canonical": manifest["canonical"],
+               "canonical_sha256": manifest["canonical_sha256"],
                "canonical_rows": manifest["row_accounting"]["canonical_rows"], "replay_run_id": args.run_id,
                "started_at": args.started_at, "seed": args.seed, "duplicate_copies": args.duplicates,
                "window_minutes": args.window_minutes, "files": files, "accounting": account(messages)}
@@ -239,12 +257,21 @@ def command_kafka_verify(args) -> None:
         raise SystemExit(1)
 
 
-def wait_for_replication(hdfs: Hdfs, path: str, timeout: float = 120) -> dict:
-    """The NameNode copies blocks after a replication change in the background; wait for it."""
+def wait_for_replication(spark, path: str, timeout: float = 120) -> dict:
+    """The NameNode copies blocks after a replication change in the background; wait for it.
+
+    Uses `hdfs fsck` where the hdfs command exists, otherwise the FileSystem API (Spark pods).
+    """
     import time
+    from harbortrace.hdfs import HdfsError
+    try:
+        hdfs = Hdfs.from_environment()
+        report_of = lambda: block_report(hdfs, path)  # noqa: E731
+    except HdfsError:
+        report_of = lambda: block_placement(spark, path)  # noqa: E731
     deadline = time.monotonic() + timeout
     while True:
-        report = block_report(hdfs, path)
+        report = report_of()
         if not report["under_replicated"] or time.monotonic() > deadline:
             return report
         time.sleep(3)
@@ -265,17 +292,22 @@ def command_spark_prepare(args) -> None:
         reference = json.loads(args.compare.read_text(encoding="utf-8")) if args.compare else None
     output = args.output or str(run / "spark-canonical")
     if output.startswith("hdfs://") and args.replication is None:
-        args.replication = int(Hdfs.from_environment().configured("dfs.replication"))
-    spark = engine_session("harbortrace-spark-prepare", master=args.master, driver_memory=args.driver_memory,
+        from harbortrace.hdfs import HdfsError
+        try:
+            args.replication = int(Hdfs.from_environment().configured("dfs.replication"))
+        except HdfsError:  # e.g. a Spark pod: no hdfs command to read the cluster setting
+            raise SystemExit("Give --replication: the cluster's dfs.replication cannot be read here")
+    master = None if args.master == "submit" else args.master  # submit: spark-submit chooses (e.g. k8s://)
+    spark = engine_session("harbortrace-spark-prepare", master=master, driver_memory=args.driver_memory,
                            shuffle_partitions=args.partitions)
     try:
         manifest = prepare_spark(spark, sources, boundaries, output, ports=ports,
                                  replication=args.replication, kind="synthetic" if fixture else "real")
         readback = spark.read.parquet(output).count()
         comparison = compare_with_reference(spark, output, reference) if reference else None
+        blocks = wait_for_replication(spark, output) if output.startswith("hdfs://") else None
     finally:
         spark.stop()
-    blocks = wait_for_replication(Hdfs.from_environment(), output) if output.startswith("hdfs://") else None
     report = {"manifest": manifest, "spark_readback_rows": readback, "comparison": comparison, "blocks": blocks}
     atomic_json(run / "spark-prepare.json", report)
     accounting = manifest["row_accounting"]
@@ -314,7 +346,8 @@ def main() -> None:
                           help="Existing prepared canonical Parquet with its .manifest.json (default: synthetic fixture)")
     readback.set_defaults(handler=command_hdfs_readback)
     files = commands.add_parser("replay-files", help="Write replay JSONL files from prepared canonical Parquet")
-    files.add_argument("--canonical", type=Path, required=True, help="Prepared Parquet with its .manifest.json")
+    files.add_argument("--canonical", type=Path, required=True,
+                       help="Prepared Parquet with its .manifest.json, or a spark-prepare output directory")
     files.add_argument("--run-id", required=True)
     files.add_argument("--started-at", default="2024-01-02T00:00:00+00:00", help="UTC ingestion time of message 1")
     files.add_argument("--seed", type=int, default=REPLAY_SEED)
@@ -345,7 +378,7 @@ def main() -> None:
     spark_prepare.add_argument("--output", help="New local path or hdfs:// URI (default: under data/storage/)")
     spark_prepare.add_argument("--replication", type=int, help="Replication of the written HDFS files (default: the cluster's dfs.replication)")
     spark_prepare.add_argument("--compare", type=Path, help="Manifest of an ingest.prepare run of the same source to compare with")
-    spark_prepare.add_argument("--master", default="local[*]")
+    spark_prepare.add_argument("--master", default="local[*]", help="Spark master, or 'submit' to defer to spark-submit")
     spark_prepare.add_argument("--driver-memory", default="4g")
     spark_prepare.add_argument("--partitions", type=int, default=16)
     spark_prepare.set_defaults(handler=command_spark_prepare)
