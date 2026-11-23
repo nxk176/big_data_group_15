@@ -1,6 +1,6 @@
 """Publish replay messages to Kafka and verify what the topic retains.
 
-The publisher streams JSONL replay files line by line, so memory does not grow
+The publisher streams replay files line by line (one JSON message per line), so memory does not grow
 with the number of messages beyond the replay tally. Its report records the
 offset range each partition received; the diagnostic consumer reads exactly
 those ranges back and compares counts and the replay-ID multiset digest.
@@ -27,13 +27,25 @@ class KafkaReplayError(RuntimeError):
     pass
 
 
+def _is_replay_file(path: Path) -> bool:
+    # *.jsonl from replay-files, or Spark text output such as bucket=20240101T0000/part-00000-<id>.c000.txt;
+    # Spark's _SUCCESS markers, .crc checksums and hidden files are not data.
+    name = path.name
+    return path.is_file() and not name.startswith((".", "_")) and (name.endswith(".jsonl") or name.startswith("part-"))
+
+
 def replay_files(paths: Iterable[Path | str]) -> list[Path]:
-    """JSONL files in a stable order: a directory contributes its *.jsonl files sorted by name."""
+    """Replay files in a stable order: a directory contributes every replay file below it,
+    sorted by relative path, so bucket=<time>/ subdirectories are read in time order."""
     files: list[Path] = []
     for path in map(Path, paths):
-        files.extend(sorted(path.glob("*.jsonl")) if path.is_dir() else [path])
+        if path.is_dir():
+            files.extend(sorted((item for item in path.rglob("*") if _is_replay_file(item)),
+                                key=lambda item: item.relative_to(path).as_posix()))
+        else:
+            files.append(path)
     if not files or not all(path.is_file() for path in files):
-        raise FileNotFoundError(f"No replay JSONL files in {[str(path) for path in paths]}")
+        raise FileNotFoundError(f"No replay files in {[str(path) for path in paths]}")
     return files
 
 
@@ -94,6 +106,10 @@ def publish(files: list[Path], topic: str, producer, *, progress_every: int = 0)
     key_partition: dict[str, int] = {}
     failures: list[str] = []
     counts = {"delivered": 0, "failed": 0, "key_moved": 0}
+    # Kafka keeps each partition in send order; counting each vessel's event-time regressions in the
+    # input lets the consumer check that the order arrived unchanged, whether or not the input was sorted.
+    last_event: dict[str, str] = {}
+    input_regressions = 0
 
     def delivered(error, message):
         if error is not None:
@@ -115,10 +131,14 @@ def publish(files: list[Path], topic: str, producer, *, progress_every: int = 0)
             tally.add(message)
         except (KeyError, ValueError) as error:
             raise KafkaReplayError(f"{path}:{number}: {error}") from error
+        key = message_key(message)
+        if message["event_time"] < last_event.get(key, ""):
+            input_regressions += 1
+        last_event[key] = message["event_time"]
         value = json.dumps(message, sort_keys=True, separators=(",", ":")).encode()
         while True:
             try:
-                producer.produce(topic, key=message_key(message).encode(), value=value, on_delivery=delivered)
+                producer.produce(topic, key=key.encode(), value=value, on_delivery=delivered)
                 break
             except BufferError:
                 producer.poll(0.5)
@@ -132,7 +152,7 @@ def publish(files: list[Path], topic: str, producer, *, progress_every: int = 0)
         failures.append(f"{remaining} messages still queued after flush")
     return {"contract_version": CONTRACT_VERSION, "topic": topic,
             "files": [{"path": str(path), "sha256": sha256_file(path)} for path in files],
-            "sent": tally.messages, **counts, "failures": failures,
+            "sent": tally.messages, **counts, "failures": failures, "input_event_time_regressions": input_regressions,
             "offsets": {str(p): {"first": span[0], "last": span[1], "messages": span[2]}
                         for p, span in sorted(ranges.items())},
             "tally": tally.summary(), "replay_id_digest": tally.digest(),
@@ -202,9 +222,13 @@ def verify(report: dict, consumer, *, timeout: float = 60) -> dict:
         problems.append("replay-ID multiset differs from the published one")
     if received != report["tally"]:
         problems.append("received accounting differs from the published accounting")
-    for name in ("invalid", "wrong_key", "key_moved", "out_of_order"):
+    for name in ("invalid", "wrong_key", "key_moved"):
         if counts[name]:
             problems.append(f"{counts[name]} messages: {name.replace('_', ' ')}")
+    sent_regressions = report.get("input_event_time_regressions", 0)
+    if counts["out_of_order"] != sent_regressions:
+        problems.append(f"per-vessel order changed: {counts['out_of_order']} event-time regressions received, "
+                        f"{sent_regressions} in the published input")
     if report["failed"]:
         problems.append(f"{report['failed']} messages were not delivered at publish time")
     return {"result": "FAIL" if problems else "PASS", "problems": problems, "topic": topic,

@@ -190,8 +190,9 @@ def print_kafka(publication: dict, check: dict) -> None:
                 + [["delivery failures", publication["failed"], "-"],
                    ["foreign / invalid / wrong key", "-", f"{check['counts']['foreign']} / {check['counts']['invalid']} / "
                                                           f"{check['counts']['wrong_key']}"],
-                   ["key on two partitions / out of order", "-", f"{check['counts']['key_moved']} / "
-                                                                f"{check['counts']['out_of_order']}"],
+                   ["keys on two partitions", publication["key_moved"], check["counts"]["key_moved"]],
+                   ["per-vessel event-time regressions", publication.get("input_event_time_regressions", 0),
+                    check["counts"]["out_of_order"]],
                    ["replay-ID digest", publication["replay_id_digest"][:16], check["replay_id_digest"][:16]]])
     for problem in check["problems"]:
         print(f"PROBLEM: {problem}")
@@ -258,7 +259,8 @@ def main() -> None:
     files.add_argument("--output", type=Path, help="New directory (default: data/replay/<run-id>)")
     files.set_defaults(handler=command_replay_files)
     kafka = commands.add_parser("kafka-publish", help="Publish replay JSONL to Kafka and verify the topic")
-    kafka.add_argument("--input", type=Path, nargs="+", help="JSONL files or directories (default: committed fixture)")
+    kafka.add_argument("--input", type=Path, nargs="+",
+                       help="Replay files or directories, including Spark bucket=*/part-* output (default: committed fixture)")
     kafka.add_argument("--topic", default="harbortrace.replay")
     kafka.add_argument("--bootstrap", default="127.0.0.1:9092")
     kafka.add_argument("--partitions", type=int, default=4)

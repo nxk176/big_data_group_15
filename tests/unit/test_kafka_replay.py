@@ -189,3 +189,36 @@ def test_real_broker_roundtrip():
     finally:
         consumer.close()
         admin.delete_topics([topic])[topic].result(30)
+
+
+def spark_bucket_layout(root, lines):
+    """Spark text output: bucket=<time>/part-*.txt with markers, checksums and unsorted lines."""
+    for bucket, chunk in (("20240101T0000", lines[:5]), ("20240101T0030", lines[5:])):
+        folder = root / f"bucket={bucket}"
+        folder.mkdir(parents=True)
+        (folder / "part-00000-abc.c000.txt").write_text("".join(reversed(chunk)))  # newest first inside the bucket
+        (folder / ".part-00000-abc.c000.txt.crc").write_text("crc")
+    (root / "_SUCCESS").write_text("")
+    (root / "._SUCCESS.crc").write_text("crc")
+
+
+def test_spark_bucket_directories_are_read_in_time_order(tmp_path):
+    lines = FIXTURE.read_text().splitlines(keepends=True)
+    spark_bucket_layout(tmp_path, lines)
+    files = replay_files([tmp_path])
+    assert [path.relative_to(tmp_path).as_posix() for path in files] == [
+        "bucket=20240101T0000/part-00000-abc.c000.txt", "bucket=20240101T0030/part-00000-abc.c000.txt"]
+    report, check = roundtrip(FakeBroker(), files)
+    assert check["result"] == "PASS", check["problems"]
+    assert report["sent"] == 8 and report["input_event_time_regressions"] > 0
+    assert check["counts"]["out_of_order"] == report["input_event_time_regressions"]
+
+
+def test_reordered_partition_is_reported(tmp_path):
+    broker = FakeBroker()
+    report = publish([FIXTURE], "replay", broker)
+    partition = max(broker.logs, key=lambda p: len(broker.logs[p]))
+    broker.logs[partition].reverse()  # same messages, different order within one partition
+    check = verify(report, broker, timeout=2)
+    assert check["result"] == "FAIL"
+    assert any("per-vessel order changed" in problem for problem in check["problems"])
