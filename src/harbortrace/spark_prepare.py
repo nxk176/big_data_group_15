@@ -105,6 +105,33 @@ def read_text(spark, path: str) -> str:
         stream.close()
 
 
+def block_placement(spark, path: str) -> dict:
+    """Replicas and DataNodes of every block below ``path`` from the Hadoop FileSystem API.
+
+    The same figures as `hdfs.block_report` (fsck) where no hdfs command exists, e.g. in a
+    Spark pod; "under-replicated" counts blocks with fewer locations than their file's factor.
+    """
+    filesystem, root = _filesystem(spark, path)
+    files = filesystem.listFiles(root, True)
+    report = {"source": "FileSystem API", "files": 0, "blocks": 0, "live_replicas": {},
+              "replicas_per_datanode": {}, "under_replicated": 0, "missing_blocks": 0, "corrupt_blocks": 0}
+    while files.hasNext():
+        status = files.next()
+        report["files"] += 1
+        for location in status.getBlockLocations():
+            names = list(location.getNames())
+            report["blocks"] += 1
+            report["live_replicas"][str(len(names))] = report["live_replicas"].get(str(len(names)), 0) + 1
+            for name in names:
+                report["replicas_per_datanode"][name] = report["replicas_per_datanode"].get(name, 0) + 1
+            report["under_replicated"] += len(names) < status.getReplication()
+            report["missing_blocks"] += not names
+            report["corrupt_blocks"] += bool(location.isCorrupt())
+    report["status"] = "HEALTHY" if not (report["missing_blocks"] or report["corrupt_blocks"]) else "CORRUPT"
+    report["replicas_per_datanode"] = dict(sorted(report["replicas_per_datanode"].items()))
+    return report
+
+
 def select_ports(boundaries: Path, ports: list[str] | None) -> tuple[list[Port], dict[str, str]]:
     """The requested ports, or every usable polygon of the layer when ``ports`` is None."""
     if ports is None:
