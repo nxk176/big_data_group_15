@@ -266,7 +266,8 @@ def command_spark_prepare(args) -> None:
     output = args.output or str(run / "spark-canonical")
     if output.startswith("hdfs://") and args.replication is None:
         args.replication = int(Hdfs.from_environment().configured("dfs.replication"))
-    spark = engine_session("harbortrace-spark-prepare", master=args.master, driver_memory=args.driver_memory,
+    master = None if args.master == "submit" else args.master  # submit: spark-submit chooses (e.g. k8s://)
+    spark = engine_session("harbortrace-spark-prepare", master=master, driver_memory=args.driver_memory,
                            shuffle_partitions=args.partitions)
     try:
         manifest = prepare_spark(spark, sources, boundaries, output, ports=ports,
@@ -345,7 +346,7 @@ def main() -> None:
     spark_prepare.add_argument("--output", help="New local path or hdfs:// URI (default: under data/storage/)")
     spark_prepare.add_argument("--replication", type=int, help="Replication of the written HDFS files (default: the cluster's dfs.replication)")
     spark_prepare.add_argument("--compare", type=Path, help="Manifest of an ingest.prepare run of the same source to compare with")
-    spark_prepare.add_argument("--master", default="local[*]")
+    spark_prepare.add_argument("--master", default="local[*]", help="Spark master, or 'submit' to defer to spark-submit")
     spark_prepare.add_argument("--driver-memory", default="4g")
     spark_prepare.add_argument("--partitions", type=int, default=16)
     spark_prepare.set_defaults(handler=command_spark_prepare)
