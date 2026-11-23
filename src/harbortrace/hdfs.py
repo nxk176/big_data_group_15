@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,30 @@ from .ingest import sha256_file
 
 class HdfsError(RuntimeError):
     pass
+
+
+def _runs_java(home: str | Path) -> bool:
+    java = Path(home) / "bin" / "java"
+    return java.is_file() and subprocess.run([str(java), "-version"], capture_output=True,
+                                             check=False).returncode == 0
+
+
+def find_java_home() -> str | None:
+    """Java home for Hadoop's launcher, which unlike Spark refuses to start without JAVA_HOME.
+
+    Same order as deploy/native/env.sh, then the `java` on PATH (Ubuntu's
+    /usr/bin/java links into the JDK; macOS's /usr/bin/java is only a stub).
+    """
+    candidates = [os.environ.get("JAVA_HOME")]
+    if Path("/usr/libexec/java_home").is_file():
+        found = subprocess.run(["/usr/libexec/java_home", "-v", "17"], capture_output=True, text=True, check=False)
+        candidates.append(found.stdout.strip() if found.returncode == 0 else None)
+    candidates += ["/opt/homebrew/opt/openjdk@17", "/usr/local/opt/openjdk@17", "/usr/lib/jvm/java-17-openjdk-amd64",
+                   "/usr/lib/jvm/java-17-openjdk-arm64"]
+    on_path = shutil.which("java")
+    if on_path:
+        candidates.append(str(Path(on_path).resolve().parents[1]))
+    return next((str(home) for home in candidates if home and _runs_java(home)), None)
 
 
 @dataclass(frozen=True)
@@ -30,9 +55,12 @@ class Hdfs:
         binary = Path(home) / "bin" / "hdfs"
         if not binary.is_file():
             raise HdfsError(f"hdfs command not found at {binary}; set HADOOP_HOME")
+        java_home = find_java_home()
+        if java_home is None:
+            raise HdfsError("No Java runtime found for the hdfs command; install Java 17 or set JAVA_HOME")
         conf = os.environ.get("HADOOP_CONF_DIR") or str(Path(__file__).resolve().parents[2] / "deploy/native")
         return cls(binary, (uri or os.environ.get("HDFS_URI") or "hdfs://127.0.0.1:9000").rstrip("/"),
-                   {"HADOOP_HOME": home, "HADOOP_CONF_DIR": conf})
+                   {"HADOOP_HOME": home, "HADOOP_CONF_DIR": conf, "JAVA_HOME": java_home})
 
     def url(self, path: str) -> str:
         if "://" in path:

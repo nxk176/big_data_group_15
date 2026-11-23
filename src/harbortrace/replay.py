@@ -6,7 +6,6 @@ the canonical fields and adds replay identity plus ingestion time.
 from __future__ import annotations
 
 import random
-from collections import Counter
 from datetime import datetime, timedelta
 from typing import Iterable
 
@@ -70,16 +69,56 @@ def validate_message(message: dict) -> None:
     utc_time(message["ingested_at"])
 
 
+def _fingerprint(identifier: str) -> int:
+    # First 64 bits of a SHA-256 identity; a collision among 10^8 messages has probability ~3e-4.
+    return int(identifier[:16], 16)
+
+
+class ReplayTally:
+    """Incremental `account`: eight bytes per identity, so a whole day of messages fits in memory."""
+
+    def __init__(self):
+        from array import array
+        self.messages = 0
+        self._ids = {name: array("Q") for name in ("replay_id", "source_record_id", "logical_id")}
+        self._vessels: set[str] = set()
+        self._run_ids: set[str] = set()
+
+    def add(self, message: dict, *, validate: bool = True) -> None:
+        if validate:
+            validate_message(message)
+        self.messages += 1
+        for name, values in self._ids.items():
+            values.append(_fingerprint(message[name]))
+        self._vessels.add(message["mmsi"])
+        self._run_ids.add(message["replay_run_id"])
+
+    def _sorted(self, name: str):
+        import numpy as np
+        return np.sort(np.frombuffer(self._ids[name], dtype=np.uint64))
+
+    @staticmethod
+    def _distinct(values) -> int:
+        return int(len(values) and 1 + (values[1:] != values[:-1]).sum())
+
+    def summary(self) -> dict:
+        replay, source, logical = (self._sorted(name) for name in self._ids)
+        distinct_replay, distinct_source = self._distinct(replay), self._distinct(source)
+        return {"messages": self.messages, "distinct_replay_ids": distinct_replay,
+                "repeated_replay_ids": self.messages - distinct_replay,
+                "distinct_source_records": distinct_source, "replay_copies": self.messages - distinct_source,
+                "distinct_logical_observations": self._distinct(logical),
+                "vessels": len(self._vessels), "run_ids": sorted(self._run_ids)}
+
+    def digest(self) -> str:
+        """Order-independent identity of the multiset of replay IDs, compared across transport."""
+        import hashlib
+        return hashlib.sha256(self._sorted("replay_id").astype(">u8").tobytes()).hexdigest()
+
+
 def account(messages: Iterable[dict]) -> dict:
     """Sent-versus-distinct counts a diagnostic consumer compares after transport."""
-    rows = list(messages)
-    for row in rows:
-        validate_message(row)
-    replay_ids = Counter(row["replay_id"] for row in rows)
-    sources = {row["source_record_id"] for row in rows}
-    return {"messages": len(rows), "distinct_replay_ids": len(replay_ids),
-            "repeated_replay_ids": sum(count - 1 for count in replay_ids.values()),
-            "distinct_source_records": len(sources), "replay_copies": len(rows) - len(sources),
-            "distinct_logical_observations": len({row["logical_id"] for row in rows}),
-            "vessels": len({row["mmsi"] for row in rows}),
-            "run_ids": sorted({row["replay_run_id"] for row in rows})}
+    tally = ReplayTally()
+    for message in messages:
+        tally.add(message)
+    return tally.summary()
