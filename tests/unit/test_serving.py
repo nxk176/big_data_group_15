@@ -361,6 +361,52 @@ def provisional_update(seq=1, *, visits=None, mode="snapshot", deleted=None):
     return update
 
 
+def test_provisional_coverage_follows_activation_and_rollback(db, gen_a, gen_b):
+    common = gen_a.visits[0]
+    only_in_a = next(v for v in gen_a.visits if v["mmsi"] == "990000002" and v["status"] == "candidate")
+    serving.apply_update(db, provisional_update(visits=[common, only_in_a]))
+    reader, query = serving.Reader(db), serving.VisitQuery()
+    serving.publish(db, gen_b, owner="test", activate=False)
+    assert reader.provisional(query)["total"] == 2
+
+    serving.publish(db, gen_b, owner="test")
+    visible = reader.provisional(query)
+    assert visible["total"] == 1
+    assert [v["visit_id"] for v in visible["visits"]] == [only_in_a["visit_id"]]
+    assert visible["cohorts"][0]["visit_count"] == 2
+
+    serving.publish(db, gen_a, owner="test")
+    assert reader.provisional(query)["total"] == 0
+    assert serving.rollback(db, owner="test") == gen_b.generation_id
+    assert [v["visit_id"] for v in reader.provisional(query)["visits"]] == [only_in_a["visit_id"]]
+
+
+def test_provisional_filters_and_page_limit_apply_to_uncovered_visits(db, gen_a):
+    serving.publish(db, gen_a, owner="test")
+    # This provisional candidate became reconciled under the same identity.
+    covered = dict(next(v for v in gen_a.visits if v["mmsi"] == "990000001"), status="candidate")
+    next_day = dict(covered)
+    for key in serving.REQUIRED_TIMES + serving.NULLABLE_TIMES:
+        if next_day[key] is not None:
+            next_day[key] = (datetime.fromisoformat(next_day[key]) + timedelta(days=1)).isoformat()
+    next_day["visit_id"] = digest(next_day["mmsi"], next_day["port_id"], next_day["first_inside"], next_day["rule_version"])
+    unmatched = []
+    for visit in (v for v in gen_a.visits if v["mmsi"] == "990000002"):
+        # Same vessel, port and time, but another rule makes a different visit ID.
+        row = dict(visit, rule_version="visits-v2", status="candidate")
+        row["visit_id"] = digest(row["mmsi"], row["port_id"], row["first_inside"], row["rule_version"])
+        unmatched.append(row)
+    serving.apply_update(db, provisional_update(visits=[covered, next_day, *reversed(unmatched)]))
+    reader = serving.Reader(db)
+    page = reader.provisional(serving.VisitQuery(port_id="4120", start="2024-01-01T00:00:00Z",
+                                                end="2024-01-02T00:00:00Z", status="candidate", limit=1))
+    assert page["total"] == 2
+    assert [v["visit_id"] for v in page["visits"]] == [unmatched[0]["visit_id"]]
+    vessel = reader.provisional(serving.VisitQuery(mmsi=covered["mmsi"], status="candidate"))
+    assert [v["visit_id"] for v in vessel["visits"]] == [next_day["visit_id"]]
+    assert reader.provisional(serving.VisitQuery(port_id="4110"))["total"] == 0
+
+
 @pytest.mark.parametrize("value", [None, [], 1, "update"])
 def test_update_container_validation(db, value):
     with pytest.raises(serving.ValidationError, match="object"):

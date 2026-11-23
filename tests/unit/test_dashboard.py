@@ -95,13 +95,43 @@ def test_summary_counts_match_reader(published):
     assert sum(r["visits"] for r in rows) == manifest["visit_count"]
 
 
-def test_provisional_section_is_separate(published):
+def test_batch_replaces_stream_visits_in_api_and_page(db):
     steps = json.loads((FIXTURES / "provisional_updates.json").read_text())["steps"]
-    serving.apply_update(published, steps[0]["update"])
-    _, _, body = call(make_app(published, token=""))
+    serving.apply_update(db, steps[0]["update"])
+    app = make_app(db, token="")
+    _, _, body = call(app)
     assert "Provisional:" in body and "may be revised or removed" in body
-    _, _, body = call(make_app(published, token=""), "/api/provisional")
-    assert json.loads(body)["total"] == 2
+    before = json.loads(call(app, "/api/provisional", "limit=1")[2])
+    assert before["total"] == 2 and len(before["visits"]) == 1
+
+    serving.publish(db, serving.load_artifact(FIXTURES / "generation_a"), owner="test")
+    after = json.loads(call(app, "/api/provisional", "limit=1")[2])
+    assert after["total"] == 0 and after["visits"] == []
+    assert after["cohorts"] == before["cohorts"]
+    assert "No provisional visits" in call(app)[2]
+
+
+@pytest.mark.parametrize("path", ["/", "/api/provisional"])
+def test_provisional_request_pins_absence_of_batch(db, monkeypatch, path):
+    update = json.loads((FIXTURES / "provisional_updates.json").read_text())["steps"][0]["update"]
+    serving.apply_update(db, update)
+    app = make_app(db, token="")
+    original = app.reader.active_generation
+    artifact = serving.load_artifact(FIXTURES / "generation_a")
+
+    def activate_after_pin():
+        generation = original()
+        if generation is None:
+            serving.publish(db, artifact, owner="test")
+        return generation
+
+    monkeypatch.setattr(app.reader, "active_generation", activate_after_pin)
+    status, _, body = call(app, path)
+    assert status == 200
+    if path == "/":
+        assert "No published results yet" in body and "Provisional:" in body
+    else:
+        assert json.loads(body)["total"] == 2
 
 
 def test_token_protects_everything_except_health(published):
@@ -129,7 +159,11 @@ def test_one_request_uses_one_generation(published, monkeypatch):
     """Even if the pointer moves mid-request, every section reads the pinned generation."""
     app = make_app(published, token="")
     original = app.reader.summary
+    gen_a = serving.load_artifact(FIXTURES / "generation_a")
     gen_b = serving.load_artifact(FIXTURES / "generation_b")
+    update = json.loads((FIXTURES / "provisional_updates.json").read_text())["steps"][0]["update"]
+    update["visits"] = [v for v in gen_a.visits if v["mmsi"] == "990000002" and v["status"] == "candidate"]
+    serving.apply_update(published, update)
 
     def summary_then_switch(query, generation_id=None):
         result = original(query, generation_id)
@@ -137,8 +171,8 @@ def test_one_request_uses_one_generation(published, monkeypatch):
         return result
     monkeypatch.setattr(app.reader, "summary", summary_then_switch)
     _, _, body = call(app)
-    gen_a = json.loads((FIXTURES / "generation_a/manifest.json").read_text())
-    assert f"{gen_a['visit_count']} visits." in body
+    assert f"{gen_a.manifest['visit_count']} visits." in body
+    assert "No provisional visits" in body
 
 
 def test_hourly_api_uses_date_status_and_vessel_filters(published):

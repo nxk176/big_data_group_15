@@ -18,6 +18,7 @@ same code runs against a real MongoDB server.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import logging
 import re
@@ -798,15 +799,46 @@ class Reader:
         return list(self.db[AGGREGATES].find(filter_, {"_id": 0}).sort([("port_id", 1), ("hour", 1)]))
 
     def provisional(self, query: VisitQuery) -> dict:
+        return self.provisional_for_generation(query, self.active_generation())
+
+    def provisional_for_generation(self, query: VisitQuery, generation: dict | None) -> dict:
+        """Return uncovered stream visits and the original snapshot counts for the pinned cohorts.
+
+        Pass the request's active_generation() result, including None before activation.
+        """
+        visit_filter = query.mongo_filter()
         cohorts = list(self.db[COHORTS].find({}, {"applied": 0}))
-        rows: list[dict] = []
-        for cohort in cohorts:
-            filter_ = {**_cohort_snapshot_filter(cohort), **query.mongo_filter()}
-            rows.extend(self.db[PROVISIONAL].find(filter_, {"_id": 0}))
-        rows.sort(key=lambda row: (row["first_inside"], row["mmsi"], row["port_id"]))
+        total = 0
+
+        def visible_visits():
+            nonlocal total
+            # Bound each query and reuse the indexes for the pinned cohort snapshots.
+            chunk_size = 128
+            for start in range(0, len(cohorts), chunk_size):
+                pins = [_cohort_snapshot_filter(c) for c in cohorts[start:start + chunk_size]]
+                match = {**visit_filter, "$or": pins}
+                if generation is None:
+                    cursor = self.db[PROVISIONAL].find(match, {"_id": 0})
+                else:
+                    # publish() keys batch rows by generation and visit ID. Look up the
+                    # identity even when the batch corrected a field such as status.
+                    cursor = self.db[PROVISIONAL].aggregate([
+                        {"$match": match},
+                        {"$addFields": {"batch_key": {"$concat": [generation["_id"], ":", "$visit_id"]}}},
+                        {"$lookup": {"from": VISITS, "localField": "batch_key", "foreignField": "_id", "as": "batch"}},
+                        {"$match": {"batch.0": {"$exists": False}}},
+                        {"$project": {"_id": 0, "batch_key": 0, "batch": 0}},
+                    ])
+                for row in cursor:
+                    total += 1
+                    yield row
+
+        limit = max(1, min(int(query.limit), 1000))
+        rows = heapq.nsmallest(limit, visible_visits(),
+                              key=lambda row: (row["first_inside"], row["mmsi"], row["port_id"]))
         return {"cohorts": [{"cohort_id": c["_id"], "seq": c["seq"], "emitted_at": c.get("emitted_at"),
                              "visit_count": c.get("visit_count", 0)} for c in cohorts],
-                "visits": rows[:max(1, min(int(query.limit), 1000))], "total": len(rows)}
+                "visits": rows, "total": total}
 
     def ports(self) -> list[str]:
         generation = self.active_generation()

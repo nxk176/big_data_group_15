@@ -112,8 +112,21 @@ def cmd_demo(args, db):
     reader = serving.Reader(db)
     a = serving.load_artifact(FIXTURES / "generation_a")
     b = serving.load_artifact(FIXTURES / "generation_b")
+    outcomes = []
+    data = json.loads((FIXTURES / "provisional_updates.json").read_text(encoding="utf-8"))
+    for step in data["steps"]:
+        try:
+            outcome = serving.apply_update(db, step["update"])["result"]
+        except serving.StaleUpdateError:
+            outcome = "stale"
+        except serving.ConflictError:
+            outcome = "conflict"
+        ids = sorted(v["visit_id"] for v in reader.provisional(serving.VisitQuery())["visits"])
+        outcomes.append(outcome == step["expect"] and ids == step["visit_ids"])
+    checks.append((f"{len(outcomes)} provisional update steps behave as expected", all(outcomes)))
     first = serving.publish(db, a, owner="demo-publisher")
     checks.append(("generation A published and active", first["activated"] and reader.active_generation()["_id"] == a.generation_id))
+    checks.append(("batch replaces the last provisional fixture visit", reader.provisional(serving.VisitQuery())["total"] == 0))
     retry = serving.publish(db, a, owner="demo-publisher")
     checks.append(("retrying A is a no-op", retry["reused"] and db[serving.VISITS].count_documents({}) == len(a.visits)))
     try:
@@ -137,18 +150,6 @@ def cmd_demo(args, db):
     checks.append(("stale fencing token cannot move the pointer", fenced))
     serving.activate_generation(db, b.generation_id, newer, reason="demo")
     serving.release_lease(db, "operator", newer)
-    outcomes = []
-    data = json.loads((FIXTURES / "provisional_updates.json").read_text(encoding="utf-8"))
-    for step in data["steps"]:
-        try:
-            outcome = serving.apply_update(db, step["update"])["result"]
-        except serving.StaleUpdateError:
-            outcome = "stale"
-        except serving.ConflictError:
-            outcome = "conflict"
-        ids = sorted(v["visit_id"] for v in reader.provisional(serving.VisitQuery())["visits"])
-        outcomes.append(outcome == step["expect"] and ids == step["visit_ids"])
-    checks.append((f"{len(outcomes)} provisional update steps behave as expected", all(outcomes)))
     summary = reader.summary(serving.VisitQuery(port_id="4120"))
     checks.append(("summary for port 4120 is non-empty", bool(summary["by_port_status"])))
     report = serving.health(db)

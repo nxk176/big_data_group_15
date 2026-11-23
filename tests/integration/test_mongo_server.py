@@ -204,7 +204,7 @@ def test_evidence_runner_uses_disposable_database(db, tmp_path, with_updates):
     if with_updates:
         assert report["updates"]["batches_applied"] == 1
         assert report["updates_retry"]["batches_reused"] == 1
-        assert report["provisional_visits"] == 2
+        assert report["provisional_visits"] == 0  # both stream identities are in the active artifact
 
 
 def test_killed_publisher_preserves_active_generation_and_retry(db, tmp_path):
