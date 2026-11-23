@@ -154,24 +154,51 @@ Publication and activation took 1.046 seconds for generation `32f38bd3be35d5b370
 MongoDB, the manifest, `/api/visits`, and the sum from `/api/summary` each counted 20,487 batch visits across 204 ports.
 The batch recorded 16,752 reconciled visits and 3,735 candidates.
 
-| Dashboard endpoint | Before publication | After activation |
-|---|---:|---:|
-| `/api/visits` | 0 | 20,487 |
-| `/api/provisional` | 20,375 | 20,375 |
-
-The batch contained all 20,375 provisional visit IDs and 112 additional IDs.
-The main dashboard view switched to the complete batch. The streaming view still returned all 20,375 provisional visits.
-The cohort snapshot hash and stored version count also matched before and after activation.
-Serving updates the active batch pointer and reads provisional cohorts independently.
-The trial therefore did not pass the automatic replacement criterion for provisional visits.
-
-The dashboard returned HTTP 200 and showed the real-data generation for all ports on 1 January 2024.
-`/healthz` returned HTTP 200 with status `degraded`. Each cohort's recorded emission time exceeded the 15-minute lag threshold.
+The PR #7 trial exposed a replacement bug. After activation both endpoints still included the same 20,375 visit IDs.
+The dashboard returned HTTP 200. Each cohort's recorded emission time exceeded the 15-minute lag threshold, so `/healthz` reported `degraded`.
 
 ![HarborTrace dashboard after batch activation, with all ports selected for 1 January 2024](assets/serving-all-ports-2024-01-01.png)
 
 The `test` dependency group in `pyproject.toml` includes `mongomock==4.3.0`.
 The serving, importer, dashboard, and real MongoDB test suites returned 136 passed in 77.83 seconds.
+
+### Provisional replacement on the January 1 data
+
+On 23 November 2026, a fresh standalone MongoDB 8.0.17 imported the same 49 stream batches and 323,353 updates. Two local HTTP servers read that database before and after activation of the same batch generation. Each request used `limit=1` and returned HTTP 200. The table records the full JSON `total`. Every positive total returned one visit row, and each zero returned an empty list.
+
+| Dashboard code | Batch before | Provisional before | Batch after | Provisional after |
+|---|---:|---:|---:|---:|
+| PR #7 behavior, reproduced on `2f0c948` | 0 | 20,375 | 20,487 | 20,375 |
+| Active batch replaces matching visit IDs | 0 | 20,375 | 20,487 | 0 |
+
+An independent comparison of all current cohort snapshots with the batch artifact found 20,375 shared visit IDs, 112 batch-only IDs and zero stream-only IDs. Activation preserved the 10,562 cohort pointers, 469,689 stored provisional versions and 49 receipt checksums. The API's `cohorts[].visit_count` describes the stored stream snapshot. Its `total` counts the matching provisional visits still visible after batch replacement.
+
+Coverage uses the visit ID, which includes vessel, port, first inside time and rule version. The manifest supplies no explicit event-time coverage interval. Unmatched visits remain visible, including visits whose identity changes after a split or merge. Activating or rolling back a generation changes coverage on the next read. A MongoDB execution plan for 128 real cohorts showed 190 matching snapshot rows and 190 lookups on the batch `_id` index, with zero batch collection scans.
+
+To reproduce the table's second row, extract the January 1 inputs under `data/` and run these commands from the repository root with Python 3.12, the serving requirements, `jq` and an isolated MongoDB server. The initial import stages the batch and creates the indexes. The stream remains visible until the explicit activation.
+
+```bash
+export PYTHONPATH=src:.
+export HARBORTRACE_MONGO_URI=mongodb://127.0.0.1:27027
+export HARBORTRACE_MONGO_READER_URI=mongodb://127.0.0.1:27027
+jan1_db="harbortrace_jan1_$(date +%s)"
+jan1_run=all-ports-2024-01-01
+import_jan1() { python scripts/serving_import.py --database "$jan1_db" "$@"; }
+probe_jan1() {
+  for endpoint in visits provisional; do
+    curl -fsS "http://127.0.0.1:8051/api/$endpoint?limit=1" |
+      jq -c --arg endpoint "$endpoint" '{endpoint: $endpoint, total, returned: (.visits | length)}'
+  done
+}
+import_jan1 import "data/engine/$jan1_run" --no-activate
+python scripts/serve_dashboard.py --database "$jan1_db" --port 8051 &
+jan1_dashboard=$!
+import_jan1 apply-directory "data/stream/$jan1_run" --source-id "$jan1_run"
+probe_jan1
+import_jan1 activate 32f38bd3be35d5b370eda4e1
+probe_jan1
+kill "$jan1_dashboard"
+```
 
 ## Reproduce the component
 

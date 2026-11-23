@@ -170,7 +170,7 @@ class Dashboard:
         if path == "/api/hourly":
             return self._json("200 OK", self._hourly(query, generation_id) if generation_id else [])
         if path == "/api/provisional":
-            return self._json("200 OK", self.reader.provisional(query))
+            return self._json("200 OK", self.reader.provisional_for_generation(query, generation))
         if path == "/":
             page = self._page(generation, query, params)
             return "200 OK", [("Content-Type", "text/html; charset=utf-8")], page.encode()
@@ -187,7 +187,7 @@ class Dashboard:
         if generation is None:
             parts.append("<div class='card banner'><strong>No published results yet.</strong> "
                          "Import a completed batch artifact with <code>scripts/serving_import.py</code>.</div>")
-            parts.append(self._provisional_section(query))
+            parts.append(self._provisional_section(query, generation))
             return "".join(parts) + "</main></body></html>"
         generation_id = generation["_id"]
         label = "SYNTHETIC fixture data" if generation.get("synthetic") else "Real-data run"
@@ -202,7 +202,7 @@ class Dashboard:
         parts.append(self._summary_section(summary))
         parts.append(self._hourly_section(hourly, query))
         parts.append(self._visit_section(visits))
-        parts.append(self._provisional_section(query))
+        parts.append(self._provisional_section(query, generation))
         links = urlencode({k: v[0] for k, v in params.items() if v and k != "token"})
         parts.append(f"<p class='muted'>JSON: <a href='/api/visits?{_e(links)}'>visits</a> · "
                      f"<a href='/api/summary?{_e(links)}'>summary</a> · <a href='/healthz'>health</a></p>")
@@ -308,14 +308,15 @@ class Dashboard:
                 f"{''.join(body)}</table>{note}"
                 "<p class='muted'>Entry and exit are intervals bounded by observations; “unknown” marks a censored bound.</p></div>")
 
-    def _provisional_section(self, query: VisitQuery) -> str:
-        result = self.reader.provisional(query)
+    def _provisional_section(self, query: VisitQuery, generation: dict | None) -> str:
+        result = self.reader.provisional_for_generation(query, generation)
         header = "<h2>Provisional (streaming) results</h2>"
         if not result["cohorts"]:
             return header + "<div class='card'>No provisional updates received.</div>"
-        cohorts = ", ".join(f"{_e(c['cohort_id'])} seq {c['seq']} emitted {_t(c['emitted_at'])}" for c in result["cohorts"])
         if not result["visits"]:
-            return header + f"<div class='card'>Cohorts: {cohorts}. No provisional visits match these filters.</div>"
+            coverage = " The active batch supersedes stream visits with a matching ID." if generation else ""
+            return header + f"<div class='card'>No provisional visits match these filters.{coverage}</div>"
+        cohorts = ", ".join(f"{_e(c['cohort_id'])} seq {c['seq']} emitted {_t(c['emitted_at'])}" for c in result["cohorts"])
         body = "".join(
             f"<tr><td>{_e(v['mmsi'])}</td><td>{_e(v['port_id'])}</td><td>{_e(v['status'])}</td>"
             f"<td>{_t(v['first_inside'])}</td><td>{_t(v['last_inside'])}</td><td>{_e(v['cohort_id'])}#{v['seq']}</td></tr>"
