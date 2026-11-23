@@ -16,6 +16,7 @@
 #     mongo     start a local MongoDB for this run               (serving)
 #     serve     import the artifact, apply the stream updates    (serving)
 #     status    serving generations and counts
+#     monitor   stream progress, threshold alerts and log warnings (add --follow while 'stream' runs)
 #     dashboard serve the dashboard on http://127.0.0.1:8050/    (serving; Ctrl-C to stop)
 #     stop      stop the MongoDB and Kafka started by this script
 #
@@ -140,6 +141,10 @@ print(json.dumps({"active": s.get("active"), "generations": len(s.get("generatio
                   "provisional_visits": sum(c["visit_count"] for c in cohorts)}, indent=2))'
 }
 
+step_monitor() {
+  "$PY" scripts/engine_monitor.py "$STREAM" --logs "$LOG" --events "$W/monitor.jsonl" "$@"
+}
+
 step_dashboard() {
   say "Dashboard on http://127.0.0.1:8050/ (Ctrl-C to stop)"
   PYTHONPATH=src:. "$PY" scripts/serve_dashboard.py --mongo-uri "$MONGO_URI" --database "$DATABASE"
@@ -151,10 +156,11 @@ step_stop() {
 }
 
 step_all() {
-  for s in check prepare batch replay kafka stream mongo serve status; do "step_$s"; done
+  for s in check prepare batch replay kafka stream mongo serve status monitor; do "step_$s"; done
   say "Done. Next: bash $0 dashboard"
 }
 
 step=${1:-}
-declare -F "step_$step" >/dev/null || { sed -n 2,24p "$0"; exit 2; }
-"step_$step"
+declare -F "step_$step" >/dev/null || { sed -n '/^set -e/q;2,$p' "$0"; exit 2; }
+shift
+"step_$step" "$@"
