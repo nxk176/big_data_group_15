@@ -2,14 +2,44 @@
 import io
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import mongomock
 import pytest
 
 from dashboard.app import make_app
 from harbortrace import serving
+from scripts import serve_dashboard
 
 FIXTURES = Path(__file__).resolve().parents[2] / "tests/fixtures/serving"
+
+
+def test_dashboard_refuses_writer_environment_without_reader(monkeypatch, capsys):
+    monkeypatch.setenv("HARBORTRACE_MONGO_URI", "mongodb://writer.invalid")
+    monkeypatch.delenv("HARBORTRACE_MONGO_READER_URI", raising=False)
+    monkeypatch.setattr("sys.argv", ["serve_dashboard.py"])
+    connect = MagicMock(side_effect=AssertionError("dashboard attempted the writer URI"))
+    monkeypatch.setattr(serving, "connect", connect)
+    with pytest.raises(SystemExit) as error:
+        serve_dashboard.main()
+    assert error.value.code == 2 and "HARBORTRACE_MONGO_READER_URI" in capsys.readouterr().err
+    connect.assert_not_called()
+
+
+@pytest.mark.parametrize(("flags", "expected"), [
+    ([], "mongodb://reader.invalid"),
+    (["--mongo-uri", "mongodb://explicit.invalid"], "mongodb://explicit.invalid"),
+])
+def test_dashboard_reader_and_explicit_uri_selection(monkeypatch, flags, expected):
+    monkeypatch.setenv("HARBORTRACE_MONGO_URI", "mongodb://writer.invalid")
+    monkeypatch.setenv("HARBORTRACE_MONGO_READER_URI", "mongodb://reader.invalid")
+    monkeypatch.setenv("HARBORTRACE_DATABASE", "selected_database")
+    monkeypatch.setattr("sys.argv", ["serve_dashboard.py", *flags])
+    connect = MagicMock()
+    monkeypatch.setattr(serving, "connect", connect)
+    monkeypatch.setattr(serve_dashboard, "make_server", MagicMock())
+    serve_dashboard.main()
+    connect.assert_called_once_with(expected, "selected_database", read_only=True)
 
 
 def call(app, path="/", query="", method="GET", headers=None):

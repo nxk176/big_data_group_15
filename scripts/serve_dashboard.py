@@ -1,7 +1,7 @@
 """Serve the read-only HarborTrace dashboard.
 
-    # Against MongoDB (use a read-only database user in shared environments):
-    PYTHONPATH=src:. python scripts/serve_dashboard.py --mongo-uri mongodb://127.0.0.1:27017 --database harbortrace_dev
+    # Against MongoDB, with HARBORTRACE_MONGO_READER_URI set to the read account:
+    PYTHONPATH=src:. python scripts/serve_dashboard.py --database harbortrace_dev
 
     # Without a server: in-memory database preloaded with the SYNTHETIC serving fixtures:
     PYTHONPATH=src:. python scripts/serve_dashboard.py --memory --load-fixtures
@@ -33,7 +33,7 @@ class QuietHandler(WSGIRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mongo-uri")
-    parser.add_argument("--database", default="harbortrace_dev")
+    parser.add_argument("--database", default=os.environ.get("HARBORTRACE_DATABASE", "harbortrace_dev"))
     parser.add_argument("--memory", action="store_true")
     parser.add_argument("--load-fixtures", action="store_true", help="With --memory: publish the synthetic fixtures")
     parser.add_argument("--host", default="127.0.0.1")
@@ -53,9 +53,9 @@ def main():
                 except (serving.StaleUpdateError, serving.ConflictError):
                     pass
     else:
-        uri = args.mongo_uri or os.environ.get("HARBORTRACE_MONGO_URI")
+        uri = args.mongo_uri or os.environ.get("HARBORTRACE_MONGO_READER_URI")
         if not uri:
-            parser.error("Select --mongo-uri, HARBORTRACE_MONGO_URI or --memory")
+            parser.error("Set HARBORTRACE_MONGO_READER_URI, specify --mongo-uri explicitly or select --memory")
         db = serving.connect(uri, args.database, read_only=True)
     with make_server(args.host, args.port, make_app(db), handler_class=QuietHandler) as server:
         print(f"HarborTrace dashboard on http://{args.host}:{args.port}/ (Ctrl+C to stop)")

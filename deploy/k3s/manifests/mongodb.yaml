@@ -40,7 +40,14 @@ spec:
             - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
           readinessProbe:
             exec:
-              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+              command:
+                - sh
+                - -ec
+                - |
+                  exec mongosh --host "$HOSTNAME" --quiet --eval '
+                    const app = db.getSiblingDB(process.env.HARBORTRACE_DATABASE);
+                    app.auth(process.env.HARBORTRACE_READER_USER, process.env.HARBORTRACE_READER_PASSWORD);
+                    app.serving_state.findOne({}, {_id: 1});'
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
