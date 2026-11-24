@@ -111,6 +111,21 @@ kubectl -n harbortrace get pods -l app=harbortrace-spark          # driver and e
 kubectl -n harbortrace logs <driver pod>                          # the script's output
 ```
 
+**On WSL2.** Three differences found on the demo laptop (Windows 11, WSL2 with `networkingMode=mirrored` in `.wslconfig`):
+
+- *Pods on the pod network may not reach the internet.* With mirrored networking, outgoing IPv6 from a pod fails (`Network is unreachable`) and IPv4 connections time out intermittently, so the `spark-python-deps` Job retries forever. The Spark pods themselves use `hostNetwork` and are not affected. Install the same packages from the node instead, as wheels for the image's Python 3.10:
+
+  ```bash
+  sudo mkdir -p /var/lib/harbortrace/spark-python && sudo chown "$(id -u):$(id -g)" /var/lib/harbortrace/spark-python
+  .venv/bin/python -m pip install --target /var/lib/harbortrace/spark-python --only-binary=:all: \
+    --python-version 3.10 --implementation cp --platform manylinux2014_x86_64 --platform manylinux_2_28_x86_64 \
+    pyarrow==17.0.0 shapely==2.0.6 numpy==2.1.3 pandas==2.2.3 requests==2.32.3 pymongo==4.10.1
+  ```
+
+- *A virtual environment outside the checkout.* `spark-submit.sh` expects `.venv/` in the checkout; with another one, set `SPARK_SUBMIT=<venv>/bin/spark-submit` and `SPARK_HOME` to that venv's `pyspark` directory.
+- *Package jars in the checkout.* With `SPARK_PACKAGES`, the driver pod fetches the resolved jars (Kafka source, about 11 files) into its working directory, which is the checkout root. Delete the `*.jar` files there after the run and never stage them. This happens on any node, not only WSL.
+- *Inputs inside the checkout.* Pods mount only the checkout, so source files on a Windows drive (`/mnt/e/...`) must be copied under `data/` first, and output paths read by executors should be absolute (executors work in `/tmp`).
+
 ### The end-to-end pipeline
 
 Put a NOAA day and the USACE boundaries under `data/source/` and `data/boundaries/` (see the [week-five guide](week05_ingestion.md), `--download-pilot`), then:
@@ -175,6 +190,20 @@ Ubuntu 24.04.5 arm64 VM (Lima on Apple silicon, 6 CPUs, 12 GB), k3s v1.37.2+k3s1
 | `engine_stream.py` on k3s, reading Kafka on k3s | 49 microbatches, 235,713 accepted, 500 duplicates, 0 late; 370 provisional visits; against batch: 235 identical, 121 + 3 + 11 explained, **0 unexplained** |
 | Updates into MongoDB | 49 batches, 6,273 updates applied; second run: 0 applied, 49 reused; dashboard shows 370 provisional visits |
 
+The same pipeline on the Windows demo laptop: WSL2 Ubuntu 24.04 (x86_64, 7.8 GB for WSL, mirrored networking), same k3s and images, same day and ports, two executor pods with two cores each. Wall times include pod start-up.
+
+| Step | Result |
+|---|---|
+| k3s and `deploy.sh` | node Ready in seconds; MongoDB, Kafka and dashboard Running after the image pulls (about 5 min); k3s with the three services used about 2 GB of memory |
+| `spark-prepare` on k3s → HDFS | PASS; 3 blocks, 2 replicas each on both DataNodes, HEALTHY; 155 s |
+| `engine_batch.py` on k3s | 370 visits (271 reconciled, 99 candidate); `visits.jsonl` SHA-256 `e9cd0334…`, identical to the VM and to the local run; 57 s |
+| `engine_experiments.py replay-spark --master submit` on k3s | 48 half-hour files, 235,713 messages, the same source records as the local replay; 52 s |
+| Kafka on k3s | 235,713 sent = received, PASS |
+| `engine_stream.py` on k3s, reading Kafka | 13 microbatches, 235,713 accepted, 0 late; against batch 238 identical, 121 + 8 + 3 explained, **0 unexplained**; 106 s |
+| Updates into MongoDB | 13 batches, 1,664 updates applied; second run 0 applied, 13 reused |
+| `engine_monitor.py` | Kafka lag 0, mean batch 2.8 s, slowest 8.4 s, no alerts |
+| Dashboard and users | `/healthz` 200, status ok; the reader user counted 370 visits and was refused a write (`not authorized`) |
+
 The dashboard on k3s with the real generation (opened through `kubectl port-forward` from macOS):
 
 ![Dashboard on k3s, 1 January 2024](images/dashboard-k3s-2024-01-01.png)
@@ -209,6 +238,6 @@ No block was lost and reads continued from the surviving replicas. The NameNode 
 - One node: Kubernetes schedules, isolates and restarts the services, but every pod and both DataNodes share one machine. Losing the node loses the service; this is not high availability.
 - MongoDB and Kafka run one replica each, without TLS; the node ports listen on the node only. Credentials are a file on the node and a Kubernetes Secret (base64, not encrypted at rest in k3s by default).
 - `hostNetwork` Spark pods are a single-node shortcut. With several nodes, HDFS would bind node addresses (or run in the cluster) and Spark pods would use the pod network.
-- The real-data runs used one day and two ports to fit the VM; the fifteen-day all-port data (106 million rows) was prepared on the laptop's local Spark, not on k3s.
+- The real-data runs used one day and two ports to fit the VM and the laptop; the fifteen-day all-port data (106 million rows) was prepared on the laptop's local Spark, not on k3s.
 
 Remove everything (including the MongoDB and Kafka volumes) with `kubectl delete namespace harbortrace`; uninstall k3s with `/usr/local/bin/k3s-uninstall.sh`.
