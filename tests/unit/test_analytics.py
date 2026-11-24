@@ -69,6 +69,12 @@ def test_custom_aggregates_match_python(enriched, synthetic):
         v["port_id"] == port and v["status"] == "candidate" for v in synthetic)
 
 
+def test_exact_mad_on_a_busy_port(spark):
+    # A real port in the two-week artifact has over 12,000 reconciled visits.
+    spans = spark.range(12000, numPartitions=2).selectExpr("id / 2.0 AS span_minutes")
+    assert spans.agg(analytics.span_mad_agg().alias("mad")).first().mad == 1500.0
+
+
 def test_pivot_unpivot_round_trip(enriched, synthetic):
     pivoted = analytics.pivot_span_buckets(enriched)
     long = analytics.unpivot_span_buckets(pivoted).collect()

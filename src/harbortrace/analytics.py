@@ -217,10 +217,12 @@ def span_mad_agg(column: str = "span_minutes"):
         upper = F.element_at(values, (n / 2 + 1).cast("int"))
         return F.when(n == 0, F.lit(None)).when(n % 2 == 1, lower).otherwise((lower + upper) / 2)
 
-    values = F.array_sort(F.collect_list(F.col(column).cast("double")))
-    center = median(values)
-    deviations = F.array_sort(F.transform(values, lambda x: F.abs(x - center)))
-    return median(deviations)
+    values = F.collect_list(F.col(column).cast("double"))
+    # Bind the group's median once. Inlining its sort inside the per-span lambda
+    # sorts the whole port again for every visit at that port.
+    centers = F.array(median(F.sort_array(values)))
+    return F.transform(centers, lambda center: median(
+        F.sort_array(F.transform(values, lambda value: F.abs(value - center)))))[0]
 
 
 def port_profiles(enriched):

@@ -1,0 +1,245 @@
+{
+  "analysis_run_id": "analytics-20261123T160541Z-1795449944134959000",
+  "completed_at": "2026-11-23T16:07:17.238902+00:00",
+  "artifact": {
+    "run_id": "all-ports-2024-01-02_15",
+    "generation_id": "abd4f61d3050c33fcb1be1dd",
+    "visits_sha256": "667e9316f8d4c69bd7ae2585fb16e123423a79c91e85a28f9f1c9c1a95fab41d",
+    "contract_version": "1.0",
+    "rule_version": "visits-v1",
+    "visit_count": 276691,
+    "status_counts": {
+      "candidate": 58090,
+      "reconciled": 218601
+    },
+    "synthetic": false
+  },
+  "source_observations": 98683129,
+  "source_days": 14,
+  "vessels": 17482,
+  "execution": {
+    "spark_version": "3.5.7",
+    "spark_master": "local[2]",
+    "java_version": "17.0.21.1",
+    "python_graphframes_version": "0.12.3",
+    "maven_package": "io.graphframes:graphframes-spark3_2.12:0.12.3",
+    "driver_heap": "1g",
+    "timings_seconds": {
+      "aggregate": 7.720046,
+      "enrich": 18.785697,
+      "graph": 12.126412,
+      "input": 13.040657,
+      "joins": 12.621171,
+      "mllib": 28.635675,
+      "spark_shutdown": 1.548512,
+      "spark_startup": 2.492118,
+      "statistics": 11.666201,
+      "total": 108.638043
+    }
+  },
+  "kmeans": {
+    "features": [
+      "median_span_minutes",
+      "span_mad_minutes",
+      "censored_share",
+      "long_gap_share",
+      "night_arrival_share",
+      "visits_per_vessel",
+      "mean_observations"
+    ],
+    "scaling": "center and divide each feature by its sample standard deviation across qualifying ports",
+    "reconciled_port_profiles": 235,
+    "complete_reconciled_visits": 66803,
+    "minimum_qualifying_ports": 10,
+    "minimum_complete_visits_per_port": 20,
+    "qualifying_ports": 133,
+    "qualifying_reconciled_visits": 205884,
+    "qualifying_complete_visits": 66289,
+    "selection_metric": "silhouette_mean_across_seeds",
+    "distance": "squared Euclidean silhouette",
+    "candidates": [
+      {
+        "k": 2,
+        "silhouette_mean": 0.47720298270401296,
+        "seed_scores": [
+          {
+            "seed": 1,
+            "silhouette": 0.479996481483422
+          },
+          {
+            "seed": 2,
+            "silhouette": 0.4799110285663281
+          },
+          {
+            "seed": 3,
+            "silhouette": 0.4717014380622888
+          }
+        ],
+        "seed_agreement": 0.9235209235209235
+      },
+      {
+        "k": 3,
+        "silhouette_mean": 0.4774365127799714,
+        "seed_scores": [
+          {
+            "seed": 1,
+            "silhouette": 0.468579877816172
+          },
+          {
+            "seed": 2,
+            "silhouette": 0.477555699145594
+          },
+          {
+            "seed": 3,
+            "silhouette": 0.4861739613781483
+          }
+        ],
+        "seed_agreement": 0.8567631199210146
+      },
+      {
+        "k": 4,
+        "silhouette_mean": 0.5064864482382577,
+        "seed_scores": [
+          {
+            "seed": 1,
+            "silhouette": 0.5002051708959641
+          },
+          {
+            "seed": 2,
+            "silhouette": 0.5053325522786882
+          },
+          {
+            "seed": 3,
+            "silhouette": 0.513921621540121
+          }
+        ],
+        "seed_agreement": 0.8924584187742083
+      }
+    ],
+    "selected_k": 4,
+    "representative_seed": 1,
+    "representative_silhouette": 0.5002051708959641,
+    "representative_clusters": [
+      {
+        "cluster": 0,
+        "ports": 20,
+        "reconciled_visits": 10811,
+        "median_across_member_ports": {
+          "median_span_minutes": 85.18333333333334,
+          "span_mad_minutes": 62.133333333333326,
+          "censored_share": 0.5839268471104608,
+          "long_gap_share": 0.413337250293772,
+          "night_arrival_share": 0.11922195253505932,
+          "visits_per_vessel": 5.974061949131201,
+          "mean_observations": 217.43517557861134
+        }
+      },
+      {
+        "cluster": 1,
+        "ports": 23,
+        "reconciled_visits": 41245,
+        "median_across_member_ports": {
+          "median_span_minutes": 414.8833333333333,
+          "span_mad_minutes": 347.30833333333334,
+          "censored_share": 0.7415730337078652,
+          "long_gap_share": 0.5570504527813713,
+          "night_arrival_share": 0.20015337423312884,
+          "visits_per_vessel": 4.516447368421052,
+          "mean_observations": 539.2466696269983
+        }
+      },
+      {
+        "cluster": 2,
+        "ports": 35,
+        "reconciled_visits": 88517,
+        "median_across_member_ports": {
+          "median_span_minutes": 114.86666666666666,
+          "span_mad_minutes": 90.00000000000001,
+          "censored_share": 0.8705035971223022,
+          "long_gap_share": 0.7511961722488039,
+          "night_arrival_share": 0.21739130434782608,
+          "visits_per_vessel": 8.057142857142857,
+          "mean_observations": 208.06462943449245
+        }
+      },
+      {
+        "cluster": 3,
+        "ports": 55,
+        "reconciled_visits": 65311,
+        "median_across_member_ports": {
+          "median_span_minutes": 47.53333333333333,
+          "span_mad_minutes": 26.708333333333332,
+          "censored_share": 0.3285158421345192,
+          "long_gap_share": 0.20730671197960918,
+          "night_arrival_share": 0.23949579831932774,
+          "visits_per_vessel": 4.671875,
+          "mean_observations": 156.17509727626458
+        }
+      }
+    ],
+    "interpretation": "The 23-port cluster has the longest median observed spans. The 35-port cluster has the highest censoring and long-gap shares. Cluster labels describe port profiles during these fourteen days."
+  },
+  "graphframes": {
+    "status": "executed",
+    "vertex_count": 247,
+    "distinct_directed_port_pairs": 1570,
+    "counts_include": [
+      "candidate",
+      "reconciled"
+    ],
+    "time_order": [
+      "mmsi",
+      "first_inside UTC",
+      "port_id"
+    ],
+    "total_adjacent_visit_pairs": 259209,
+    "same_port_pairs": 198077,
+    "same_port_share": 0.7641594234768083,
+    "pagerank_reset_probability": 0.15,
+    "pagerank_max_iterations": 20,
+    "pagerank_edge_weighting": "unweighted",
+    "top_pagerank": [
+      {
+        "id": "2417",
+        "pagerank": 3.377404851562522
+      },
+      {
+        "id": "2255",
+        "pagerank": 3.2611039879354267
+      },
+      {
+        "id": "398",
+        "pagerank": 3.0811508263950493
+      },
+      {
+        "id": "1911",
+        "pagerank": 2.8666078081789506
+      },
+      {
+        "id": "1992",
+        "pagerank": 2.7078699311798364
+      }
+    ],
+    "most_frequent_pair": {
+      "dst": "1911",
+      "src": "1911",
+      "transitions": 16741,
+      "vessels": 875
+    },
+    "most_frequent_cross_port_pair": {
+      "src": "2398",
+      "dst": "2393",
+      "transitions": 2207
+    },
+    "scc_max_iterations": 10,
+    "strongly_connected_components": 26,
+    "component_sizes_frequency": {
+      "1": 23,
+      "2": 2,
+      "220": 1
+    },
+    "isolated_ports": 6,
+    "independent_checks": "A Python tally of consecutive visits and a two-pass depth-first traversal confirmed edge, transition and component counts. The exact median absolute deviations matched Python statistics.median at all 235 ports.",
+    "interpretation": "Repeated observations of the same port account for most adjacent visit pairs. PageRank uses one edge per observed port pair, so its top port can differ from the port with the most transitions."
+  }
+}

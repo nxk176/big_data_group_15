@@ -1,6 +1,7 @@
 """Runner exports preserve exact values and identify their validated input."""
 import csv
 import hashlib
+import shutil
 from pathlib import Path
 
 from harbortrace.serving import load_artifact
@@ -49,6 +50,24 @@ def test_artifact_provenance_retains_validated_manifest_and_generation():
     assert provenance['created_at'] == '2026-11-02T00:00:00+00:00'
     assert provenance['source']['description'] == 'reference_cases.json events, two synthetic vessels per case'
     assert provenance['artifact_path'] == str(FIXTURE.resolve())
+
+
+def test_local_artifact_keeps_validated_bytes_if_source_is_replaced(tmp_path):
+    directory = shutil.copytree(FIXTURE, tmp_path / "batch with spaces")
+    scratch = tmp_path / "snapshot with spaces"
+    scratch.mkdir()
+    provenance, source = analytics_run.artifact_input(directory, master="local[2]", scratch=scratch)
+    (directory / "visits.jsonl").write_text("replaced")
+    assert source == {"path": f"file:{scratch / 'visits.jsonl'}"}
+    assert (scratch / "visits.jsonl").read_bytes() == (FIXTURE / "visits.jsonl").read_bytes()
+    assert provenance["visit_count"] == 12
+    assert provenance["artifact_path"] == str(directory)
+    assert provenance["visits_sha256"] == hashlib.sha256((scratch / "visits.jsonl").read_bytes()).hexdigest()
+
+
+def test_remote_executors_can_read_an_artifact_local_to_the_driver(tmp_path):
+    _, source = analytics_run.artifact_input(FIXTURE, master="spark://example:7077", scratch=tmp_path)
+    assert source == {"visits": list(load_artifact(FIXTURE).visits)}
 
 
 def test_synthetic_provenance_is_reproducible_and_seed_labelled():

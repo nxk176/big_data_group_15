@@ -1,8 +1,20 @@
-"""Run the Spark analytics suite on a completed batch artifact or on SYNTHETIC visits.
+r"""Run the Spark analytics suite on a completed batch artifact or on SYNTHETIC visits.
 
     PYTHONPATH=src python scripts/analytics_run.py --synthetic
     PYTHONPATH=src python scripts/analytics_run.py --artifact tests/fixtures/serving/generation_a
     PYTHONPATH=src python scripts/analytics_run.py --artifact data/serving/artifacts/<real-run>
+
+To reproduce the all-port run with Java 17 and requirements-serving.txt installed:
+
+    python -m pip install graphframes-py==0.12.3
+    PYTHONPATH=src SPARK_LOCAL_IP=127.0.0.1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+        PYSPARK_SUBMIT_ARGS='--driver-memory 1g --conf spark.ui.showConsoleProgress=false pyspark-shell' \
+        python scripts/analytics_run.py --artifact ../inputs/engine-all-ports-2024-01-02_15 \
+        --spark-master 'local[2]' --packages io.graphframes:graphframes-spark3_2.12:0.12.3 \
+        --output-dir data/analytics/all-ports-14-days
+
+Use a fresh output directory. The captured port-profile and graph results are in
+docs/evidence/analytics-2024-01-02_15.json.
 
 Outputs (ignored by Git) go to data/analytics/<mode>-<UTC stamp>/: results.json, CSV tables and
 physical plans. Synthetic results verify code paths only; they are not findings.
@@ -12,12 +24,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from harbortrace import analytics
-from harbortrace.serving import BatchArtifact, build_manifest, load_artifact
+from harbortrace.serving import BatchArtifact, build_manifest, load_artifact, snapshot_visit_file
 from harbortrace.contracts import digest
 from harbortrace.visits import Rules
 
@@ -54,9 +67,18 @@ def input_provenance(visits, *, artifact: BatchArtifact | None = None,
             "input_type": "generated_synthetic"}
 
 
+def artifact_input(directory: Path, *, master: str, scratch: Path) -> tuple[dict, dict]:
+    """Keep full contract validation while letting local Spark split the JSONL itself."""
+    artifact = load_artifact(directory)
+    provenance = input_provenance(artifact.visits, artifact=artifact)
+    if master == "local" or master.startswith("local["):
+        path = snapshot_visit_file(artifact, scratch / "visits.jsonl")
+        return provenance, {"path": f"file:{path}"}
+    # Cluster executors may have no access to the driver's local artifact path.
+    return provenance, {"visits": list(artifact.visits)}
+
+
 def main():
-    run_started = time.perf_counter()
-    started_at = datetime.now(timezone.utc).isoformat()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--artifact", type=Path, help="Completed batch artifact directory (validated first)")
@@ -67,15 +89,22 @@ def main():
     parser.add_argument("--packages", help="Extra Spark packages, e.g. io.graphframes:graphframes-spark3_2.12:0.12.3")
     parser.add_argument("--repositories", help="Extra package repositories, e.g. https://repos.spark-packages.org")
     args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="harbortrace-analytics-") as scratch:
+        run(args, Path(scratch))
 
+
+def run(args, scratch: Path):
+    run_started = time.perf_counter()
+    started_at = datetime.now(timezone.utc).isoformat()
     started = time.perf_counter()
-    artifact = None
     if args.synthetic:
-        visits, synthetic, mode = analytics.synthetic_visits(seed=args.seed), True, "synthetic"
+        visits = analytics.synthetic_visits(seed=args.seed)
+        provenance = input_provenance(visits, seed=args.seed, created_at=started_at)
+        frame_source, mode = {"visits": visits}, "synthetic"
     else:
-        artifact = load_artifact(args.artifact)
-        visits, synthetic, mode = list(artifact.visits), artifact.manifest["synthetic"], "artifact"
-    provenance = input_provenance(visits, artifact=artifact, seed=args.seed, created_at=started_at)
+        provenance, frame_source = artifact_input(args.artifact, master=args.spark_master, scratch=scratch)
+        mode = "artifact"
+    synthetic = provenance["synthetic"]
     timings: dict = {"input": time.perf_counter() - started}
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = (args.output_dir or ROOT / "data/analytics" / f"{mode}-{stamp}").resolve()
@@ -84,7 +113,7 @@ def main():
     spark = analytics.analytics_session(args.spark_master, warehouse=str(out / "warehouse"),
                                         packages=args.packages, repositories=args.repositories)
     timings["spark_startup"] = time.perf_counter() - started
-    results: dict = {"mode": mode, "synthetic": synthetic, "input_visits": len(visits),
+    results: dict = {"mode": mode, "synthetic": synthetic, "input_visits": provenance["visit_count"],
                      "spark_version": spark.version, "input_provenance": provenance,
                      "analysis_run_id": f"analytics-{stamp}-{time.time_ns()}", "started_at": started_at,
                      "execution": {"spark_master": args.spark_master, "packages": args.packages,
@@ -94,7 +123,7 @@ def main():
     cached = []
     try:
         started = time.perf_counter()
-        frame = analytics.visits_frame(spark, visits)
+        frame = analytics.visits_frame(spark, **frame_source)
         enriched = analytics.enrich(frame).cache()
         cached.append(enriched)
         results["enriched_rows"] = enriched.count()
@@ -150,7 +179,7 @@ def main():
     (out / "results.json").write_text(json.dumps(results, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
 
     print("\nHARBORTRACE ANALYTICS" + (" (SYNTHETIC INPUT - code-path evidence only)" if synthetic else ""))
-    print(f"Input visits: {len(visits)}; ports profiled: {results['port_profiles']}")
+    print(f"Input visits: {results['input_visits']}; ports profiled: {results['port_profiles']}")
     print(f"Pivot/unpivot totals preserved: {results['pivot_unpivot_total_preserved']}")
     j = results["joins"]
     print(f"Joins: rows={j['rows']} equal={j['rows_equal']} broadcast={j['broadcast_strategy']} "
