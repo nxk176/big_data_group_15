@@ -268,6 +268,18 @@ def plan_text(frame) -> str:
     return frame._jdf.queryExecution().executedPlan().toString()
 
 
+def vessel_totals(visits):
+    from pyspark.sql import functions as F
+    return visits.groupBy("mmsi").agg(F.count("*").alias("vessel_visits"),
+                                      F.countDistinct("port_id").alias("vessel_ports"))
+
+
+def join_visit_dimensions(visits, ports, vessels):
+    """Attach a port name and vessel history to every matched visit."""
+    return (visits.join(ports, "port_id").join(vessels, "mmsi")
+            .select("visit_id", "mmsi", "port_name", "vessel_visits", "vessel_ports"))
+
+
 def join_experiment(enriched, ports):
     """Same logical join executed with broadcast and sort-merge hints; rows must agree.
 
@@ -286,10 +298,7 @@ def join_experiment(enriched, ports):
         left = sorted(tuple(r) for r in broadcast.collect())
         right = sorted(tuple(r) for r in merge.collect())
         # Multiple join: visits x ports x per-vessel statistics.
-        vessel_stats = enriched.groupBy("mmsi").agg(F.count("*").alias("vessel_visits"),
-                                                    F.countDistinct("port_id").alias("vessel_ports"))
-        multi = (enriched.join(F.broadcast(ports), "port_id").join(vessel_stats, "mmsi")
-                 .select("visit_id", "mmsi", "port_name", "vessel_visits", "vessel_ports"))
+        multi = join_visit_dimensions(enriched, F.broadcast(ports), vessel_totals(enriched))
         multi_plan = plan_text(multi)
         multi_rows = multi.count()
     finally:
